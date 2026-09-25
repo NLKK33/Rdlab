@@ -16,3 +16,6 @@ dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Trace de diagnostic ecrite par lancer-rdlab.bat en cas d echec
+rdlab-lancement.log
