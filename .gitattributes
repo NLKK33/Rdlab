@@ -1,0 +1,12 @@
+# Normalisation des fins de ligne : LF dans le depot, natif dans la copie
+# de travail. Evite que le meme fichier apparaisse modifie selon l'OS.
+* text=auto eol=lf
+
+# Le .bat n'est interprete correctement par cmd.exe qu'en CRLF.
+*.bat text eol=crlf
+
+# Le .sh et l'unite systemd doivent rester en LF meme sous Windows.
+*.sh text eol=lf
+*.service text eol=lf
+
+*.png binary

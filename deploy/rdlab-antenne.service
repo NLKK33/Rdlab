@@ -1,0 +1,50 @@
+# Antenne rdlab (rendez-vous + relais) - a installer sur VOTRE VPS.
+#
+#   sudo useradd --system --create-home --home-dir /opt/rdlab --shell /usr/sbin/nologin rdlab
+#   sudo -u rdlab python3 -m venv /opt/rdlab/venv
+#   sudo -u rdlab /opt/rdlab/venv/bin/pip install cryptography
+#   # copiez le paquet rdlab/ dans /opt/rdlab/rdlab/
+#   sudo cp deploy/rdlab-antenne.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rdlab-antenne
+#   sudo journalctl -u rdlab-antenne -f
+#
+# L'antenne n'a besoin NI de la cle privee des machines, NI des mots de
+# passe : elle recopie du chiffre. Elle tourne donc sans privileges.
+
+[Unit]
+Description=Antenne rdlab (rendez-vous + relais)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rdlab
+Group=rdlab
+WorkingDirectory=/opt/rdlab
+Environment=RDLAB_DATA=/opt/rdlab/data
+ExecStart=/opt/rdlab/venv/bin/python -m rdlab.rendezvous --bind 0.0.0.0 --port 7800 --max-sessions 4
+Restart=on-failure
+RestartSec=5
+
+# Durcissement : ce service n'a besoin de rien d'autre que du reseau.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/rdlab/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+# Garde-fous de ressources : une antenne ne doit jamais saturer le VPS.
+LimitNOFILE=4096
+MemoryMax=512M
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target

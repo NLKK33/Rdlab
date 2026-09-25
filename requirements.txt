@@ -1,0 +1,6 @@
+cryptography>=42      # X25519, Ed25519, HKDF, AES-GCM, scrypt
+mss>=9                # capture d ecran multiplateforme
+pillow>=10            # encodage/decodage JPEG, affichage
+numpy>=1.24           # comparaison de tuiles vectorisee
+pynput>=1.7           # injection souris/clavier (hote uniquement)
+# tkinter fait partie de la bibliotheque standard (paquet python3-tk sous Linux)
