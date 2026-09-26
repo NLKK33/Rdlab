@@ -139,16 +139,42 @@ n'ouvrent de port : **les deux se connectent en sortant**.
 
 ### Sur le VPS
 
+Oui, un logiciel s'installe bien sur le VPS — mais **pas** l'interface. L'antenne
+est un service *sans écran* : aucune capture, aucun affichage, aucune injection
+clavier/souris. Elle recopie des octets chiffrés qu'elle ne peut pas lire.
+
+Concrètement, ce qui est déposé sur le serveur : **5 modules Python**
+(`__init__`, `protocol`, `crypto`, `identity`, `rendezvous`, ~60 Ko) et une
+seule dépendance, `cryptography`. Ni `mss`, ni `pillow`, ni `numpy`, ni
+`pynput`, ni `tkinter`. `app.py`, `capture.py`, `inject.py` et `client.py` sont
+volontairement **exclus** : le VPS n'a aucune raison d'embarquer du code
+capable de filmer un écran ou de piloter un clavier.
+
+Depuis votre machine, trois commandes :
+
 ```bash
-sudo ufw allow 7800/tcp
-python3 -m venv venv && venv/bin/pip install cryptography
-venv/bin/python -m rdlab.rendezvous --bind 0.0.0.0 --port 7800
+ssh root@VOTRE-VPS "mkdir -p /tmp/rdlab-install"
+scp -r rdlab deploy root@VOTRE-VPS:/tmp/rdlab-install/
+ssh -t root@VOTRE-VPS "cd /tmp/rdlab-install && sh deploy/install-antenne.sh"
 ```
 
-L'antenne n'a besoin **que** de `cryptography` — ni capture, ni interface
-graphique, ni injection. Pour un service permanent :
-[`deploy/rdlab-antenne.service`](deploy/rdlab-antenne.service) (unité systemd
-durcie, utilisateur non privilégié, `MemoryMax`, `CPUQuota`).
+L'installeur [`deploy/install-antenne.sh`](deploy/install-antenne.sh) crée un
+utilisateur système sans shell, un venv, installe l'unité systemd durcie
+([`deploy/rdlab-antenne.service`](deploy/rdlab-antenne.service) : utilisateur
+non privilégié, `ProtectSystem=strict`, `MemoryMax`, `CPUQuota`), ouvre le port
+si ufw ou firewalld est actif, démarre le service et vérifie qu'il tourne.
+
+```bash
+journalctl -u rdlab-antenne -f      # suivre en direct
+systemctl stop rdlab-antenne        # couper
+```
+
+> **L'antenne est ouverte.** N'importe qui trouvant le port peut y enregistrer
+> une machine et s'en servir comme relais gratuit — donc consommer votre bande
+> passante. Il ne peut pas lire les sessions (chiffrement de bout en bout), mais
+> il peut squatter le service. Tant qu'aucun contrôle d'accès n'est ajouté :
+> gardez `--max-sessions` bas, et si vos IP sont fixes, restreignez le port à
+> celles-ci (`ufw allow from <IP> to any port 7800 proto tcp`).
 
 ### Sur la machine hôte
 
