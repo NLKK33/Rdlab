@@ -74,6 +74,25 @@ humaine (consentement, empreinte, mot de passe) bloquent le fil de fond sur un
 
 ## Installation
 
+### Windows
+
+1. Installez **Python 3.9+** depuis [python.org](https://www.python.org/downloads/)
+   en cochant **« Add python.exe to PATH »** sur le premier écran.
+2. Récupérez le projet (`git clone`, ou *Code → Download ZIP* sur GitHub).
+3. Double-cliquez **`installer-windows.bat`**.
+
+Il vérifie Python et tkinter, crée l'environnement isolé, installe les
+dépendances et propose de lancer l'application. Ensuite, le lancement
+quotidien se fait par **`lancer-rdlab.bat`**.
+
+> **Ne copiez jamais le dossier `rdlab-data/` d'une machine à l'autre.** Il
+> contient la clé privée qui *est* l'identité de la machine. Deux machines
+> partageant cette clé auraient le même identifiant et la même empreinte :
+> la vérification d'identité ne voudrait plus rien dire. Chaque installation
+> génère la sienne au premier démarrage.
+
+### Linux / macOS, ou installation manuelle
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows ;  source .venv/bin/activate sous Linux/macOS
