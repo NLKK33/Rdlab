@@ -67,11 +67,14 @@ class ScrollFrame(tk.Frame):
                                                anchor="nw")
         self.body.bind("<Configure>", self._on_body)
         self._canvas.bind("<Configure>", self._on_canvas)
+        self.bar = T.ScrollBar(self, self._canvas)
+        self._canvas.configure(yscrollcommand=self.bar.set)
         self._canvas.pack(side="left", fill="both", expand=True)
-        for w in (self._canvas, self.body):
-            w.bind("<Enter>", lambda e: self._canvas.bind_all(
-                "<MouseWheel>", self._on_wheel))
-            w.bind("<Leave>", lambda e: self._canvas.unbind_all("<MouseWheel>"))
+        self.bar.pack(side="right", fill="y", padx=(6, 0))
+        # La molette n'est PAS liee ici : une liaison posee sur ce cadre est
+        # perdue des que le pointeur survole un enfant (carte, libelle,
+        # console). C'est l'application qui la capte globalement et la
+        # redirige vers la page visible -- voir RdlabApp._on_wheel.
 
     def _on_body(self, _event):
         self._canvas.configure(scrollregion=self._canvas.bbox("all"))
@@ -79,8 +82,11 @@ class ScrollFrame(tk.Frame):
     def _on_canvas(self, event):
         self._canvas.itemconfigure(self._win, width=event.width)
 
-    def _on_wheel(self, event):
-        self._canvas.yview_scroll(-1 * (event.delta // 120), "units")
+    def scroll(self, units):
+        self._canvas.yview_scroll(units, "units")
+
+    def to(self, fraction):
+        self._canvas.yview_moveto(fraction)
 
 
 class Collapsible(tk.Frame):
@@ -415,8 +421,41 @@ class RdlabApp:
         self.root.configure(bg=T.BG)
         self._build()
         self._refresh_credentials()
+        self._bind_scrolling()
         self.root.after(300, self._check_relay)
         self.root.protocol("WM_DELETE_WINDOW", self._on_quit)
+
+    def _bind_scrolling(self):
+        """La molette est captee au niveau de l'application.
+
+        Liee widget par widget, elle cesse de fonctionner des que le
+        pointeur survole une carte ou un libelle : Tk retire la liaison
+        du parent en entrant dans l'enfant. C'etait le bug qui empechait
+        de descendre en plein ecran."""
+        self.root.bind_all("<MouseWheel>", self._on_wheel)
+        self.root.bind_all("<Button-4>", lambda e: self._scroll_page(-3))
+        self.root.bind_all("<Button-5>", lambda e: self._scroll_page(3))
+        self.root.bind_all("<Prior>", lambda e: self._scroll_page(-10))
+        self.root.bind_all("<Next>", lambda e: self._scroll_page(10))
+
+    def _scroll_page(self, units):
+        self._scrolls[self._current].scroll(units)
+
+    def _on_wheel(self, event):
+        # Une autre fenetre (la visionneuse) gere sa propre molette :
+        # sans ce test, faire defiler l'ecran distant ferait aussi bouger
+        # la fenetre principale.
+        try:
+            if event.widget.winfo_toplevel() is not self.root:
+                return
+        except Exception:
+            return
+        # Un champ de texte defile lui-meme s'il deborde.
+        if isinstance(event.widget, tk.Text):
+            first, last = event.widget.yview()
+            if (last - first) < 0.999:
+                return
+        self._scroll_page(-1 * (event.delta // 120))
 
     def _ui(self, fn, *args):
         """Reporte un appel sur le fil de l'interface. Seul point de

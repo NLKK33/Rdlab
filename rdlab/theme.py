@@ -254,6 +254,76 @@ class NavTabs(tk.Frame):
             self._on_change(index)
 
 
+class ScrollBar(tk.Canvas):
+    """Barre de defilement dessinee.
+
+    Une ttk.Scrollbar impose le rendu natif du systeme, clair et large,
+    qui jure avec le reste. Celle-ci suit la palette, se replie quand le
+    contenu tient a l'ecran, et reste saisissable a la souris.
+
+    Elle s'efface au lieu de s'afficher vide : une barre permanente
+    occupant toute la hauteur laisse croire qu'il y a quelque chose a
+    faire defiler alors que non."""
+
+    WIDTH = 9
+
+    def __init__(self, parent, target, page_bg=BG):
+        super().__init__(parent, bg=page_bg, highlightthickness=0, bd=0,
+                         width=self.WIDTH)
+        self._target = target
+        self._first, self._last = 0.0, 1.0
+        self._drag_origin = None
+        self.bind("<Configure>", lambda e: self._redraw())
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+        self.bind("<ButtonRelease-1>", lambda e: self._set_drag(None))
+        self.bind("<Enter>", lambda e: self._redraw(True))
+        self.bind("<Leave>", lambda e: self._redraw(False))
+
+    def set(self, first, last):
+        """Appele par Tk via yscrollcommand."""
+        self._first, self._last = float(first), float(last)
+        self._redraw()
+
+    @property
+    def needed(self):
+        return (self._last - self._first) < 0.999
+
+    def _set_drag(self, value):
+        self._drag_origin = value
+
+    def _on_press(self, event):
+        h = self.winfo_height()
+        top, bottom = self._first * h, self._last * h
+        if top <= event.y <= bottom:
+            self._drag_origin = (event.y, self._first)
+        else:                       # clic hors du curseur : on y saute
+            span = self._last - self._first
+            self._target.yview_moveto(
+                max(0.0, min(1.0, event.y / h - span / 2)))
+
+    def _on_drag(self, event):
+        if not self._drag_origin:
+            return
+        y0, first0 = self._drag_origin
+        h = max(1, self.winfo_height())
+        self._target.yview_moveto(
+            max(0.0, min(1.0, first0 + (event.y - y0) / h)))
+
+    def _redraw(self, hover=False):
+        self.delete("all")
+        if not self.needed:
+            return
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 2 or h < 2:
+            return
+        top = self._first * h
+        bottom = max(self._last * h, top + 24)   # curseur toujours saisissable
+        draw_round_rect(self, 2, top, w - 2, min(bottom, h), (w - 4) / 2,
+                        fill=SURFACE_3 if not hover else ACCENT_DIM,
+                        outline="")
+
+
 def entry(parent, textvariable, show=None, width=None):
     """Champ de saisie : pas d'arrondi possible sur un tk.Entry, on mise
     sur un fond distinct et une bordure fine."""
