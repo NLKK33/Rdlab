@@ -9,7 +9,6 @@ __pycache__/
 *.py[cod]
 build/
 dist/
-*.spec
 
 # Editeurs / OS
 .idea/
@@ -19,3 +18,8 @@ Thumbs.db
 
 # Trace de diagnostic ecrite par lancer-rdlab.bat en cas d echec
 rdlab-lancement.log
+
+# Captures de travail
+rdlab-ui.png
+rdlab-exe.png
+rdlab-app.png

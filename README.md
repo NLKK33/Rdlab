@@ -74,12 +74,28 @@ humaine (consentement, empreinte, mot de passe) bloquent le fil de fond sur un
 
 ## Installation
 
-### Windows
+### Windows — le plus simple : l'executable
+
+Recuperez **`rdlab.exe`** et double-cliquez. C'est tout : un seul fichier,
+aucun Python a installer, rien a configurer. Copiez-le sur autant de machines
+que vous voulez.
+
+L'executable range ses donnees dans `%LOCALAPPDATA%\rdlab` (cle d'appareil,
+reglages, journal) plutot qu'a cote de lui : un `.exe` peut etre lance depuis
+un dossier en lecture seule, ou depuis n'importe ou via un raccourci.
+
+Pour le construire vous-meme depuis les sources, apres avoir fait
+l'installation ci-dessous : double-cliquez **`build-exe.bat`**. Le resultat
+arrive dans `dist\rdlab.exe` (environ 32 Mo).
+
+### Windows — depuis les sources
 
 1. Installez **Python 3.9+** depuis [python.org](https://www.python.org/downloads/)
    en cochant **« Add python.exe to PATH »** sur le premier écran.
 2. Récupérez le projet (`git clone`, ou *Code → Download ZIP* sur GitHub).
 3. Double-cliquez **`installer-windows.bat`**.
+
+C'est la voie a prendre si vous voulez lire ou modifier le code.
 
 Il vérifie Python et tkinter, crée l'environnement isolé, installe les
 dépendances et propose de lancer l'application. Ensuite, le lancement

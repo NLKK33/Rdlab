@@ -37,7 +37,8 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from . import auth, client, handshake, host, identity, session_log
+from . import auth, client, handshake, host, identity, prefs as prefs_mod
+from . import session_log
 
 APP_NAME = "rdlab"
 CONSENT_TIMEOUT = 60
@@ -85,6 +86,17 @@ def entry(parent, textvariable, width=24, show=None):
                     highlightthickness=1)
 
 
+def big_button(parent, text, command, kind="primary"):
+    """Action principale d'un ecran : une seule par onglet, impossible a
+    rater. Le reste des commandes reste en boutons normaux."""
+    colors = {"primary": (ACCENT, "#0d0d12"), "danger": (BAD, "#160d10")}
+    bg, fg = colors[kind]
+    return tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
+                     activebackground=bg, activeforeground=fg, relief="flat",
+                     font=("Segoe UI Semibold", 12), pady=13, cursor="hand2",
+                     borderwidth=0, disabledforeground=MUTED)
+
+
 def button(parent, text, command, kind="normal", width=None):
     colors = {"normal": (EDGE, FG), "primary": (ACCENT, "#0d0d12"),
               "danger": (BAD, "#160d10"), "ok": (OK, "#101408")}
@@ -128,6 +140,37 @@ class ScrollFrame(tk.Frame):
 
     def _on_wheel(self, event):
         self._canvas.yview_scroll(-1 * (event.delta // 120), "units")
+
+
+class Collapsible(tk.Frame):
+    """Section repliee par defaut.
+
+    Tout ce qui n'est pas necessaire a un usage courant va la-dedans :
+    l'ecran principal ne doit montrer que l'identifiant, l'antenne et le
+    bouton. Les reglages restent accessibles, mais ils ne sont plus
+    l'accueil."""
+
+    def __init__(self, parent, title):
+        super().__init__(parent, bg=BG)
+        self._open = False
+        self._title = title
+        self._head = tk.Label(self, text=self._label(), bg=BG, fg=MUTED,
+                              font=F_SMALL, anchor="w", cursor="hand2")
+        self._head.pack(fill="x")
+        self._head.bind("<Button-1>", lambda e: self.toggle())
+        self.body = tk.Frame(self, bg=CARD, highlightbackground=EDGE,
+                             highlightthickness=1)
+
+    def _label(self):
+        return ("  v  %s" if self._open else "  >  %s") % self._title
+
+    def toggle(self):
+        self._open = not self._open
+        self._head.configure(text=self._label())
+        if self._open:
+            self.body.pack(fill="x", pady=(4, 0))
+        else:
+            self.body.pack_forget()
 
 
 class ConsoleBox(tk.Text):
@@ -401,6 +444,7 @@ class RdlabApp:
     def __init__(self):
         self.device = identity.DeviceIdentity.load_or_create()
         self.creds = auth.CredentialStore()
+        self.prefs = prefs_mod.Prefs()
         self.service = None
         self.service_thread = None
         self.viewer_ctrl = None
@@ -408,8 +452,8 @@ class RdlabApp:
 
         self.root = tk.Tk()
         self.root.title("%s - bureau a distance (laboratoire)" % APP_NAME)
-        self.root.geometry("920x820")
-        self.root.minsize(820, 560)
+        self.root.geometry("760x700")
+        self.root.minsize(700, 560)
         self.root.configure(bg=BG)
         self._init_style()
         self._build()
@@ -471,7 +515,13 @@ class RdlabApp:
 
     # ---------------------------------------------------------- PARTAGE
     def _build_share(self):
+        """Ecran principal du partage : identifiant, antenne, un bouton.
+
+        Tout le reste (mot de passe, permissions, reseau local, empreinte)
+        est replie. Quelqu'un qui a deja configure sa machine ne voit que
+        ce dont il a besoin pour demarrer."""
         root = self.tab_share
+
         top = card(root)
         top.pack(fill="x", pady=(0, 12))
         inner = tk.Frame(top, bg=CARD)
@@ -483,167 +533,175 @@ class RdlabApp:
         tk.Label(idrow, text=self.device.machine_id, bg=CARD, fg=FG,
                  font=F_ID).pack(side="left")
         button(idrow, "Copier", self._copy_id).pack(side="left", padx=14)
-        label(inner, "Empreinte - a verifier avec le client", MUTED,
-              F_SMALL).pack(fill="x", pady=(10, 0))
-        fp = tk.Frame(inner, bg=CARD)
-        fp.pack(fill="x")
-        tk.Label(fp, text=self.device.fingerprint, bg=CARD, fg=ACCENT,
-                 font=("Consolas", 9)).pack(side="left")
-        button(fp, "Copier", self._copy_fingerprint).pack(side="left", padx=14)
+        label(inner, "A communiquer a la personne qui se connecte.",
+              MUTED, F_SMALL).pack(fill="x")
 
-        # --- securite
-        sec = card(root, "Securite")
-        sec.pack(fill="x", pady=(0, 12))
-        body = tk.Frame(sec, bg=CARD)
-        body.pack(fill="x", padx=16, pady=(0, 14))
-
-        self.pw_state = tk.StringVar()
-        row = tk.Frame(body, bg=CARD)
-        row.pack(fill="x", pady=3)
-        self.pw_label = tk.Label(row, textvariable=self.pw_state, bg=CARD,
-                                 fg=FG, font=F_BODY, anchor="w")
-        self.pw_label.pack(side="left")
-        button(row, "Definir le mot de passe",
-               self._set_password).pack(side="right")
-
-        self.unattended_var = tk.BooleanVar(value=self.creds.unattended)
-        chk = tk.Checkbutton(
-            body, text="Acces sans surveillance (accepter sans me demander)",
-            variable=self.unattended_var, command=self._toggle_unattended,
-            bg=CARD, fg=FG, selectcolor=BG, activebackground=CARD,
-            activeforeground=FG, font=F_BODY, anchor="w",
-            highlightthickness=0, borderwidth=0)
-        chk.pack(fill="x", pady=(10, 0))
-        label(body, "Desactive par defaut. Exige un mot de passe. Toutes les "
-                    "sessions restent journalisees.", MUTED, F_SMALL).pack(
-            fill="x", padx=24)
-
-        self.viewonly_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            body, text="Observation seule (ne pas appliquer clavier/souris)",
-            variable=self.viewonly_var, bg=CARD, fg=FG, selectcolor=BG,
-            activebackground=CARD, activeforeground=FG, font=F_BODY,
-            anchor="w", highlightthickness=0, borderwidth=0).pack(
-            fill="x", pady=(10, 0))
-
-        # --- mode reseau
-        net = card(root, "Comment le client vous joint")
+        net = card(root)
         net.pack(fill="x", pady=(0, 12))
         body = tk.Frame(net, bg=CARD)
-        body.pack(fill="x", padx=16, pady=(0, 14))
-        self.mode_var = tk.StringVar(value="relay")
+        body.pack(fill="x", padx=16, pady=14)
+        self.mode_var = tk.StringVar(value=self.prefs.get("share_mode"))
+        self.relay_var = tk.StringVar(value=self.prefs.get("relay"))
+        label(body, "Adresse de votre antenne", MUTED, F_SMALL).pack(fill="x")
+        self.relay_entry = entry(body, self.relay_var, 40)
+        self.relay_entry.pack(fill="x", pady=(2, 4))
+        self.relay_entry.bind("<FocusOut>", lambda e: self.prefs.set(
+            "relay", self.relay_var.get().strip()))
+        label(body, "Retenue pour les prochaines fois.", MUTED,
+              F_SMALL).pack(fill="x")
 
-        def radio(parent, text, value):
-            return tk.Radiobutton(
-                parent, text=text, variable=self.mode_var, value=value,
-                command=self._refresh_mode, bg=CARD, fg=FG, selectcolor=BG,
-                activebackground=CARD, activeforeground=FG, font=F_BODY,
-                anchor="w", highlightthickness=0, borderwidth=0)
+        self.pw_state = tk.StringVar()
+        self.pw_label = tk.Label(root, textvariable=self.pw_state, bg=BG,
+                                 fg=FG, font=F_BODY, anchor="w")
+        self.pw_label.pack(fill="x", pady=(0, 6))
 
-        radio(body, "Via une antenne (VPS) - aucun port a ouvrir", "relay"
-              ).pack(fill="x")
-        relay_row = tk.Frame(body, bg=CARD)
-        relay_row.pack(fill="x", padx=24, pady=(2, 8))
-        self.relay_var = tk.StringVar(value="")
-        label(relay_row, "Adresse :", MUTED, F_SMALL).pack(side="left")
-        self.relay_entry = entry(relay_row, self.relay_var, 34)
-        self.relay_entry.pack(side="left", padx=8)
-        label(relay_row, "ex. vps.exemple.net:7800", MUTED, F_SMALL).pack(
-            side="left")
+        self.share_btn = big_button(root, "Demarrer le partage",
+                                    self._toggle_share)
+        self.share_btn.pack(fill="x")
+        self.host_status = tk.StringVar(value="a l arret")
+        tk.Label(root, textvariable=self.host_status, bg=BG, fg=MUTED,
+                 font=F_BODY, anchor="w").pack(fill="x", pady=(8, 10))
+        self.endsession_btn = button(root, "Terminer la session",
+                                     self._end_session, "normal", width=20)
+        self._set_endsession(False)
 
-        radio(body, "Reseau local - ecouter un port sur cette machine",
-              "direct").pack(fill="x")
-        lan_row = tk.Frame(body, bg=CARD)
-        lan_row.pack(fill="x", padx=24, pady=(2, 0))
+        # ---- replie : tout ce qui ne sert pas a chaque lancement
+        adv = Collapsible(root, "Options avancees")
+        adv.pack(fill="x", pady=(0, 10))
+        a = tk.Frame(adv.body, bg=CARD)
+        a.pack(fill="x", padx=16, pady=12)
+
+        row = tk.Frame(a, bg=CARD)
+        row.pack(fill="x", pady=(0, 8))
+        button(row, "Definir le mot de passe",
+               self._set_password).pack(side="left")
+
+        self.viewonly_var = tk.BooleanVar(value=self.prefs.get("view_only"))
+        self._check(a, "Observation seule (ne pas appliquer clavier/souris)",
+                    self.viewonly_var,
+                    lambda: self.prefs.set("view_only",
+                                           self.viewonly_var.get())).pack(
+            fill="x")
+
+        self.unattended_var = tk.BooleanVar(value=self.creds.unattended)
+        self._check(a, "Accepter sans me demander (acces sans surveillance)",
+                    self.unattended_var, self._toggle_unattended).pack(
+            fill="x", pady=(6, 0))
+        label(a, "Desactive par defaut. Exige un mot de passe. Toutes les "
+                 "sessions restent journalisees.", MUTED, F_SMALL).pack(
+            fill="x", padx=22)
+
+        tk.Frame(a, bg=EDGE, height=1).pack(fill="x", pady=10)
+        self._radio(a, "Passer par l'antenne (recommande)", self.mode_var,
+                    "relay", self._refresh_mode).pack(fill="x")
+        self._radio(a, "Reseau local uniquement (ecouter un port)",
+                    self.mode_var, "direct", self._refresh_mode).pack(fill="x")
+        lan = tk.Frame(a, bg=CARD)
+        lan.pack(fill="x", padx=22, pady=(2, 0))
         self.bind_var = tk.StringVar(value=self._guess_lan_ip())
-        self.port_var = tk.StringVar(value="7700")
-        label(lan_row, "Adresse :", MUTED, F_SMALL).pack(side="left")
-        self.bind_entry = entry(lan_row, self.bind_var, 16)
+        self.port_var = tk.StringVar(value=self.prefs.get("lan_port"))
+        label(lan, "Adresse :", MUTED, F_SMALL).pack(side="left")
+        self.bind_entry = entry(lan, self.bind_var, 16)
         self.bind_entry.pack(side="left", padx=8)
-        label(lan_row, "Port :", MUTED, F_SMALL).pack(side="left")
-        self.port_entry = entry(lan_row, self.port_var, 7)
+        label(lan, "Port :", MUTED, F_SMALL).pack(side="left")
+        self.port_entry = entry(lan, self.port_var, 7)
         self.port_entry.pack(side="left", padx=8)
 
-        # --- controle
-        ctrl = tk.Frame(root, bg=BG)
-        ctrl.pack(fill="x", pady=(0, 10))
-        self.share_btn = button(ctrl, "Demarrer le partage", self._toggle_share,
-                                "primary", width=22)
-        self.share_btn.pack(side="left")
-        self.endsession_btn = button(ctrl, "Terminer la session",
-                                     self._end_session, "normal", width=20)
-        self.endsession_btn.pack(side="left", padx=10)
-        self._set_endsession(False)
-        self.host_status = tk.StringVar(value="a l arret")
-        tk.Label(ctrl, textvariable=self.host_status, bg=BG, fg=MUTED,
-                 font=F_BODY).pack(side="left", padx=14)
+        tk.Frame(a, bg=EDGE, height=1).pack(fill="x", pady=10)
+        label(a, "Empreinte de cette machine", MUTED, F_SMALL).pack(fill="x")
+        fp = tk.Frame(a, bg=CARD)
+        fp.pack(fill="x")
+        tk.Label(fp, text=self.device.fingerprint, bg=CARD, fg=ACCENT,
+                 font=("Consolas", 8), anchor="w", justify="left",
+                 wraplength=500).pack(side="left")
+        button(fp, "Copier", self._copy_fingerprint).pack(side="left", padx=10)
 
-        self.host_console = ConsoleBox(root, height=8)
-        self.host_console.pack(fill="x", pady=(0, 12))
+        det = Collapsible(root, "Details techniques")
+        det.pack(fill="x", pady=(0, 12))
+        self.host_console = ConsoleBox(det.body, height=9)
+        self.host_console.pack(fill="x", padx=2, pady=2)
         self._refresh_mode()
 
-    # -------------------------------------------------------- CONNEXION
+    def _check(self, parent, text, var, command):
+        return tk.Checkbutton(parent, text=text, variable=var,
+                              command=command, bg=CARD, fg=FG, selectcolor=BG,
+                              activebackground=CARD, activeforeground=FG,
+                              font=F_BODY, anchor="w", highlightthickness=0,
+                              borderwidth=0)
+
+    def _radio(self, parent, text, var, value, command):
+        return tk.Radiobutton(parent, text=text, variable=var, value=value,
+                              command=command, bg=CARD, fg=FG, selectcolor=BG,
+                              activebackground=CARD, activeforeground=FG,
+                              font=F_BODY, anchor="w", highlightthickness=0,
+                              borderwidth=0)
+
     def _build_connect(self):
+        """Ecran client : un identifiant, une antenne, un bouton."""
         root = self.tab_connect
-        c = card(root, "Machine a joindre")
+
+        c = card(root)
         c.pack(fill="x", pady=(0, 12))
         body = tk.Frame(c, bg=CARD)
-        body.pack(fill="x", padx=16, pady=(0, 14))
+        body.pack(fill="x", padx=16, pady=14)
 
-        self.cmode_var = tk.StringVar(value="relay")
+        label(body, "Identifiant de la machine a joindre", MUTED,
+              F_SMALL).pack(fill="x")
+        self.target_var = tk.StringVar(value=self.prefs.get("last_target"))
+        self.target_entry = entry(body, self.target_var, 40)
+        self.target_entry.pack(fill="x", pady=(2, 2))
+        self.target_hint = label(body, "Les 9 chiffres affiches sur l autre "
+                                       "machine.", MUTED, F_SMALL)
+        self.target_hint.pack(fill="x")
 
-        def radio(text, value):
-            return tk.Radiobutton(
-                body, text=text, variable=self.cmode_var, value=value,
-                command=self._refresh_cmode, bg=CARD, fg=FG, selectcolor=BG,
-                activebackground=CARD, activeforeground=FG, font=F_BODY,
-                anchor="w", highlightthickness=0, borderwidth=0)
+        label(body, "Adresse de votre antenne", MUTED, F_SMALL).pack(
+            fill="x", pady=(12, 0))
+        self.cvia_var = tk.StringVar(value=self.prefs.get("connect_relay")
+                                     or self.prefs.get("relay"))
+        self.cvia_entry = entry(body, self.cvia_var, 40)
+        self.cvia_entry.pack(fill="x", pady=(2, 0))
+        self.cvia_entry.bind("<FocusOut>", lambda e: self.prefs.set(
+            "connect_relay", self.cvia_var.get().strip()))
 
-        radio("Via une antenne (VPS)", "relay").pack(fill="x")
-        row = tk.Frame(body, bg=CARD)
-        row.pack(fill="x", padx=24, pady=(2, 8))
-        self.cvia_var = tk.StringVar(value="")
-        label(row, "Antenne :", MUTED, F_SMALL).pack(side="left")
-        self.cvia_entry = entry(row, self.cvia_var, 34)
-        self.cvia_entry.pack(side="left", padx=8)
+        self.connect_btn = big_button(root, "Se connecter", self._do_connect)
+        self.connect_btn.pack(fill="x")
+        self.client_status = tk.StringVar(value="pret")
+        tk.Label(root, textvariable=self.client_status, bg=BG, fg=MUTED,
+                 font=F_BODY, anchor="w").pack(fill="x", pady=(8, 10))
 
-        radio("Reseau local (adresse IP)", "direct").pack(fill="x")
-        row = tk.Frame(body, bg=CARD)
-        row.pack(fill="x", padx=24, pady=(2, 8))
-        self.cport_var = tk.StringVar(value="7700")
+        adv = Collapsible(root, "Options avancees")
+        adv.pack(fill="x", pady=(0, 10))
+        a = tk.Frame(adv.body, bg=CARD)
+        a.pack(fill="x", padx=16, pady=12)
+        self.cmode_var = tk.StringVar(value=self.prefs.get("connect_mode"))
+        self._radio(a, "Passer par l'antenne (recommande)", self.cmode_var,
+                    "relay", self._refresh_cmode).pack(fill="x")
+        self._radio(a, "Reseau local (saisir une adresse IP)", self.cmode_var,
+                    "direct", self._refresh_cmode).pack(fill="x")
+        row = tk.Frame(a, bg=CARD)
+        row.pack(fill="x", padx=22, pady=(2, 10))
+        self.cport_var = tk.StringVar(value=self.prefs.get("connect_port"))
         label(row, "Port :", MUTED, F_SMALL).pack(side="left")
         self.cport_entry = entry(row, self.cport_var, 7)
         self.cport_entry.pack(side="left", padx=8)
 
-        row = tk.Frame(body, bg=CARD)
-        row.pack(fill="x", pady=(10, 0))
-        self.target_var = tk.StringVar()
-        self.target_label = label(row, "Identifiant (9 chiffres) :", MUTED,
-                                  F_SMALL)
-        self.target_label.pack(side="left")
-        self.target_entry = entry(row, self.target_var, 22)
-        self.target_entry.pack(side="left", padx=8)
-        label(row, "Qualite :", MUTED, F_SMALL).pack(side="left", padx=(14, 0))
-        self.quality_var = tk.StringVar(value="balanced")
-        ttk.Combobox(row, textvariable=self.quality_var, width=10,
-                     state="readonly",
-                     values=["low", "balanced", "high"]).pack(side="left",
-                                                              padx=8)
+        row = tk.Frame(a, bg=CARD)
+        row.pack(fill="x")
+        label(row, "Qualite :", MUTED, F_SMALL).pack(side="left")
+        self.quality_var = tk.StringVar(value=self.prefs.get("quality"))
+        combo = ttk.Combobox(row, textvariable=self.quality_var, width=12,
+                             state="readonly",
+                             values=["low", "balanced", "high"])
+        combo.pack(side="left", padx=8)
+        combo.bind("<<ComboboxSelected>>", lambda e: self.prefs.set(
+            "quality", self.quality_var.get()))
 
-        ctrl = tk.Frame(root, bg=BG)
-        ctrl.pack(fill="x", pady=(0, 10))
-        self.connect_btn = button(ctrl, "Se connecter", self._do_connect,
-                                  "primary", width=18)
-        self.connect_btn.pack(side="left")
-        self.client_status = tk.StringVar(value="pret")
-        tk.Label(ctrl, textvariable=self.client_status, bg=BG, fg=MUTED,
-                 font=F_BODY).pack(side="left", padx=14)
-
-        self.client_console = ConsoleBox(root, height=12)
-        self.client_console.pack(fill="x", pady=(0, 12))
+        det = Collapsible(root, "Details techniques")
+        det.pack(fill="x", pady=(0, 12))
+        self.client_console = ConsoleBox(det.body, height=12)
+        self.client_console.pack(fill="x", padx=2, pady=2)
         self._refresh_cmode()
 
-    # ------------------------------------------------------------ LOG
     def _build_log(self):
         root = self.tab_log
         head = tk.Frame(root, bg=BG)
@@ -687,36 +745,45 @@ class RdlabApp:
 
     def _refresh_credentials(self):
         if self.creds.has_password:
-            self.pw_state.set("Mot de passe : defini")
+            self.pw_state.set("Mot de passe d acces : defini")
             self.pw_label.configure(fg=OK)
+            self.share_btn.configure(state="normal")
         else:
-            self.pw_state.set("Mot de passe : AUCUN - partage impossible")
-            self.pw_label.configure(fg=BAD)
+            self.pw_state.set(
+                "Definissez d abord un mot de passe d acces "
+                "(Options avancees)")
+            self.pw_label.configure(fg=WARN)
+            self.share_btn.configure(state="disabled")
         self.unattended_var.set(self.creds.unattended)
 
     def _refresh_mode(self):
         relay = self.mode_var.get() == "relay"
-        for w in (self.relay_entry,):
-            w.configure(state="normal" if relay else "disabled")
+        self.relay_entry.configure(state="normal" if relay else "disabled")
         for w in (self.bind_entry, self.port_entry):
             w.configure(state="disabled" if relay else "normal")
+        self.prefs.set("share_mode", self.mode_var.get())
 
     def _refresh_cmode(self):
         relay = self.cmode_var.get() == "relay"
         self.cvia_entry.configure(state="normal" if relay else "disabled")
         self.cport_entry.configure(state="disabled" if relay else "normal")
-        self.target_label.configure(
-            text="Identifiant (9 chiffres) :" if relay else "Adresse IP :")
+        self.target_hint.configure(
+            text="Les 9 chiffres affiches sur l autre machine." if relay
+            else "L adresse IP de l autre machine sur votre reseau local.")
+        self.prefs.set("connect_mode", self.cmode_var.get())
 
     def _set_endsession(self, active):
-        """Un bouton grise garde sinon sa couleur d'alerte et laisse croire
-        qu'une session est en cours."""
+        """Le coupe-circuit n'existe que pendant une session.
+
+        Un bouton grise en permanence est du bruit sur un ecran qu'on veut
+        minimal -- et, colore en rouge, il laisserait croire qu'une session
+        est en cours."""
         if active:
             self.endsession_btn.configure(state="normal", bg=BAD,
                                           activebackground=BAD, fg="#160d10")
+            self.endsession_btn.pack(anchor="w", pady=(0, 10))
         else:
-            self.endsession_btn.configure(state="disabled", bg=EDGE,
-                                          activebackground=EDGE, fg=MUTED)
+            self.endsession_btn.pack_forget()
 
     def _set_banner(self, text, color, bg=CARD):
         self.banner_text.set(text)
@@ -799,6 +866,8 @@ class RdlabApp:
                 self.host_console.write("port invalide", "bad")
                 return
 
+        self.prefs.set("relay", relay or self.prefs.get("relay"))
+        self.prefs.set("lan_port", self.port_var.get())
         options = host.HostOptions(bind=bind, port=port, relay=relay,
                                    view_only=self.viewonly_var.get())
         self.service = host.HostService(self.device, self.creds, options,
@@ -909,6 +978,9 @@ class RdlabApp:
                 self.client_console.write("port invalide", "bad")
                 return
 
+        self.prefs.set("last_target", target)
+        self.prefs.set("connect_relay", via or self.prefs.get("connect_relay"))
+        self.prefs.set("connect_port", self.cport_var.get())
         self.connect_btn.configure(state="disabled")
         self.client_status.set("connexion...")
         threading.Thread(target=self._connect_worker,

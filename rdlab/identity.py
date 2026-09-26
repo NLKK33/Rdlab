@@ -29,13 +29,38 @@ import hashlib
 import json
 import os
 import stat
+import sys
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey)
 
-DATA_DIR = os.environ.get("RDLAB_DATA", os.path.join(os.getcwd(), "rdlab-data"))
 KEY_FILE = "device_key.json"
+
+
+def _default_data_dir():
+    """Ou vivent la cle d'appareil, les reglages et le journal.
+
+    RDLAB_DATA est prioritaire : c'est ce qu'utilise le service d'antenne.
+    En executable autonome (PyInstaller), le dossier courant peut etre
+    n'importe quoi -- le bureau, System32 si l'exe est lance depuis un
+    raccourci -- et n'est pas forcement accessible en ecriture. On se
+    replie donc sur un emplacement stable et personnel.
+    Lance depuis les sources, on garde rdlab-data/ a cote du projet :
+    c'est visible, et c'est la regle de non-furtivite du labo.
+    """
+    env = os.environ.get("RDLAB_DATA")
+    if env:
+        return env
+    if getattr(sys, "frozen", False):
+        base = (os.environ.get("LOCALAPPDATA")
+                or os.environ.get("XDG_DATA_HOME")
+                or os.path.join(os.path.expanduser("~"), ".local", "share"))
+        return os.path.join(base, "rdlab")
+    return os.path.join(os.getcwd(), "rdlab-data")
+
+
+DATA_DIR = _default_data_dir()
 
 
 def _ensure_dir():
