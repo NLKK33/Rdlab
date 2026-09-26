@@ -66,17 +66,28 @@ say "Verification de Python"
 command -v python3 >/dev/null 2>&1 || die "python3 absent"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' \
     || die "python3 >= 3.8 requis"
-if ! python3 -c 'import venv' >/dev/null 2>&1; then
-    say "Installation de python3-venv"
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq && apt-get install -y -qq python3-venv
-    elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y -q python3-venv || true
-    else
-        die "installez le module venv de python3, puis relancez"
-    fi
-fi
 echo "    $(python3 --version)"
+
+# Sur Debian/Ubuntu, `import venv` reussit alors que la creation echoue :
+# c'est ensurepip qui est absent, livre dans un paquet separe dont le nom
+# depend de la version (python3.14-venv, python3.12-venv...). On teste donc
+# ensurepip, pas venv, et on installe le paquet versionne en priorite.
+if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+    PYVER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+    say "ensurepip absent : installation de python${PYVER}-venv"
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq || true
+        apt-get install -y -qq "python${PYVER}-venv" \
+            || apt-get install -y -qq python3-venv \
+            || die "installez python${PYVER}-venv puis relancez"
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y -q python3-venv || die "installez le venv de python3 puis relancez"
+    else
+        die "ensurepip manquant : installez le paquet venv de python3, puis relancez"
+    fi
+    python3 -c 'import ensurepip' >/dev/null 2>&1 \
+        || die "ensurepip toujours absent apres installation"
+fi
 
 say "Utilisateur systeme : $RDUSER"
 if id "$RDUSER" >/dev/null 2>&1; then
@@ -102,8 +113,15 @@ rm -f "$PREFIX/rdlab/__main__.py"
 echo "    5 modules copies (aucun code graphique, de capture ou d'injection)"
 
 say "Environnement Python"
-if [ ! -x "$PREFIX/venv/bin/python" ]; then
-    python3 -m venv "$PREFIX/venv"
+# Une creation de venv interrompue laisse un bin/python utilisable mais pas
+# de pip. Tester la seule presence de l'interpreteur ferait sauter l'etape
+# et echouer plus loin : on valide pip, et on reconstruit si besoin.
+if [ -d "$PREFIX/venv" ] && ! "$PREFIX/venv/bin/pip" --version >/dev/null 2>&1; then
+    warn "environnement incomplet detecte, reconstruction"
+    rm -rf "$PREFIX/venv"
+fi
+if [ ! -x "$PREFIX/venv/bin/pip" ]; then
+    python3 -m venv "$PREFIX/venv" || die "creation du venv impossible"
 fi
 "$PREFIX/venv/bin/pip" install --quiet --upgrade pip
 "$PREFIX/venv/bin/pip" install --quiet "cryptography>=42"
