@@ -1,6 +1,6 @@
 """rdlab - l'application.
 
-    python -m rdlab.app
+    python -m rdlab
 
 Une seule fenetre pour les deux roles : partager son ecran, ou se
 connecter a une autre machine.
@@ -14,8 +14,8 @@ terminal que personne ne regarde. Ici, elles sont des boites de dialogue
 modales, avec le defaut sur "refuser" et un compte a rebours visible.
 
 La regle de non-furtivite est appliquee dans l'interface elle-meme :
-quand une session est active, la banniere passe en rouge et reste
-visible. On ne peut pas partager son ecran sans le voir.
+quand une session est active, un bandeau rouge nomme qui vous observe et
+reste visible. On ne peut pas partager son ecran sans le voir.
 
 ARCHITECTURE
 
@@ -29,104 +29,44 @@ _ui(), qui reporte l'appel sur la boucle tkinter. Les demandes qui
 exigent une reponse humaine (consentement, empreinte, mot de passe)
 bloquent le fil de fond sur un threading.Event pendant que l'interface
 affiche la boite de dialogue.
+
+L'apparence (cartes et boutons arrondis, palette) vit dans theme.py.
+Ce module ne definit aucune couleur.
 """
 
 import socket
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk
 
 from . import auth, client, handshake, host, identity, prefs as prefs_mod
 from . import session_log
+from . import theme as T
 
 APP_NAME = "rdlab"
 CONSENT_TIMEOUT = 60
 
-BG = "#12121a"
-CARD = "#1b1b26"
-EDGE = "#2a2a3a"
-FG = "#e6e6f0"
-MUTED = "#8b8ba7"
-ACCENT = "#7aa2f7"
-OK = "#9ece6a"
-WARN = "#e0af68"
-BAD = "#f7768e"
-
-F_TITLE = ("Segoe UI Semibold", 13)
-F_BODY = ("Segoe UI", 10)
-F_SMALL = ("Segoe UI", 9)
-F_MONO = ("Consolas", 10)
-F_ID = ("Consolas", 26, "bold")
-F_SAS = ("Consolas", 30, "bold")
-
 
 # =====================================================================
-#  Petits composants
+#  Conteneurs
 # =====================================================================
-
-def card(parent, title=None):
-    frame = tk.Frame(parent, bg=CARD, highlightbackground=EDGE,
-                     highlightthickness=1)
-    if title:
-        tk.Label(frame, text=title, bg=CARD, fg=ACCENT, font=F_TITLE,
-                 anchor="w").pack(fill="x", padx=14, pady=(12, 6))
-    return frame
-
-
-def label(parent, text, fg=FG, font=F_BODY, **kw):
-    return tk.Label(parent, text=text, bg=kw.pop("bg", CARD), fg=fg,
-                    font=font, anchor="w", justify="left", **kw)
-
-
-def entry(parent, textvariable, width=24, show=None):
-    return tk.Entry(parent, textvariable=textvariable, width=width, show=show,
-                    bg=BG, fg=FG, insertbackground=FG, relief="flat",
-                    font=F_BODY, highlightbackground=EDGE,
-                    highlightthickness=1)
-
-
-def big_button(parent, text, command, kind="primary"):
-    """Action principale d'un ecran : une seule par onglet, impossible a
-    rater. Le reste des commandes reste en boutons normaux."""
-    colors = {"primary": (ACCENT, "#0d0d12"), "danger": (BAD, "#160d10")}
-    bg, fg = colors[kind]
-    return tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
-                     activebackground=bg, activeforeground=fg, relief="flat",
-                     font=("Segoe UI Semibold", 12), pady=13, cursor="hand2",
-                     borderwidth=0, disabledforeground=MUTED)
-
-
-def button(parent, text, command, kind="normal", width=None):
-    colors = {"normal": (EDGE, FG), "primary": (ACCENT, "#0d0d12"),
-              "danger": (BAD, "#160d10"), "ok": (OK, "#101408")}
-    bg, fg = colors[kind]
-    return tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
-                     activebackground=bg, activeforeground=fg, relief="flat",
-                     font=F_BODY, padx=14, pady=7, cursor="hand2",
-                     width=width, borderwidth=0,
-                     disabledforeground=MUTED)
-
 
 class ScrollFrame(tk.Frame):
-    """Cadre defilant. L'onglet Partage depasse la hauteur d'un ecran de
-    portable (1366x768) : sans defilement, le bouton de demarrage se
-    retrouve sous la ligne de flottaison et l'application parait cassee."""
+    """Cadre defilant.
+
+    Un ecran de portable fait 768 px de haut : sans defilement, le bouton
+    principal peut se retrouver sous la ligne de flottaison et
+    l'application parait cassee."""
 
     def __init__(self, parent):
-        super().__init__(parent, bg=BG)
-        self._canvas = tk.Canvas(self, bg=BG, highlightthickness=0,
-                                 borderwidth=0)
-        bar = ttk.Scrollbar(self, orient="vertical",
-                            command=self._canvas.yview)
-        self.body = tk.Frame(self._canvas, bg=BG)
+        super().__init__(parent, bg=T.BG)
+        self._canvas = tk.Canvas(self, bg=T.BG, highlightthickness=0, bd=0)
+        self.body = tk.Frame(self._canvas, bg=T.BG)
         self._win = self._canvas.create_window((0, 0), window=self.body,
                                                anchor="nw")
         self.body.bind("<Configure>", self._on_body)
         self._canvas.bind("<Configure>", self._on_canvas)
-        self._canvas.configure(yscrollcommand=bar.set)
         self._canvas.pack(side="left", fill="both", expand=True)
-        bar.pack(side="right", fill="y")
         for w in (self._canvas, self.body):
             w.bind("<Enter>", lambda e: self._canvas.bind_all(
                 "<MouseWheel>", self._on_wheel))
@@ -147,44 +87,46 @@ class Collapsible(tk.Frame):
 
     Tout ce qui n'est pas necessaire a un usage courant va la-dedans :
     l'ecran principal ne doit montrer que l'identifiant, l'antenne et le
-    bouton. Les reglages restent accessibles, mais ils ne sont plus
-    l'accueil."""
+    bouton."""
 
-    def __init__(self, parent, title):
-        super().__init__(parent, bg=BG)
+    def __init__(self, parent, title_text):
+        super().__init__(parent, bg=T.BG)
         self._open = False
-        self._title = title
-        self._head = tk.Label(self, text=self._label(), bg=BG, fg=MUTED,
-                              font=F_SMALL, anchor="w", cursor="hand2")
+        self._title = title_text
+        self._head = tk.Label(self, text=self._label(), bg=T.BG, fg=T.FG_DIM,
+                              font=T.F_BODY_B, anchor="w", cursor="hand2",
+                              padx=4, pady=6)
         self._head.pack(fill="x")
         self._head.bind("<Button-1>", lambda e: self.toggle())
-        self.body = tk.Frame(self, bg=CARD, highlightbackground=EDGE,
-                             highlightthickness=1)
+        self._head.bind("<Enter>", lambda e: self._head.configure(fg=T.FG))
+        self._head.bind("<Leave>", lambda e: self._head.configure(fg=T.FG_DIM))
+        self._card = T.Card(self, padding=18)
+        self.body = self._card.body
 
     def _label(self):
-        return ("  v  %s" if self._open else "  >  %s") % self._title
+        return ("▾  %s" if self._open else "▸  %s") % self._title
 
     def toggle(self):
         self._open = not self._open
         self._head.configure(text=self._label())
         if self._open:
-            self.body.pack(fill="x", pady=(4, 0))
+            self._card.pack(fill="x", pady=(0, 4))
         else:
-            self.body.pack_forget()
+            self._card.pack_forget()
 
 
 class ConsoleBox(tk.Text):
-    """Zone de journal en lecture seule, avec couleurs par niveau."""
+    """Journal en lecture seule, colore par gravite."""
 
     def __init__(self, parent, height=10):
-        super().__init__(parent, height=height, bg=BG, fg=MUTED, relief="flat",
-                         font=("Consolas", 9), wrap="word", padx=10, pady=8,
-                         highlightbackground=EDGE, highlightthickness=1)
-        self.tag_config("info", foreground=MUTED)
-        self.tag_config("good", foreground=OK)
-        self.tag_config("warn", foreground=WARN)
-        self.tag_config("bad", foreground=BAD)
-        self.tag_config("accent", foreground=ACCENT)
+        super().__init__(parent, height=height, bg=T.BG, fg=T.FG_DIM,
+                         relief="flat", font=T.F_CODE, wrap="word", padx=12,
+                         pady=10, highlightthickness=1,
+                         highlightbackground=T.EDGE, borderwidth=0,
+                         insertbackground=T.ACCENT)
+        for tag, color in (("info", T.MUTED), ("good", T.OK), ("warn", T.WARN),
+                           ("bad", T.BAD), ("accent", T.ACCENT)):
+            self.tag_config(tag, foreground=color)
         self.configure(state="disabled")
 
     def write(self, message, tag="info"):
@@ -209,12 +151,10 @@ class ModalAnswer:
 
     def __init__(self, default=False):
         self.value = default
-        self.extra = None
         self.done = threading.Event()
 
-    def set(self, value, extra=None):
+    def set(self, value):
         self.value = value
-        self.extra = extra
         self.done.set()
 
     def wait(self, timeout):
@@ -222,55 +162,41 @@ class ModalAnswer:
         return self.value
 
 
-def _modal(root, title, width=460):
+def _modal(root, window_title, width=480):
     win = tk.Toplevel(root)
-    win.title(title)
-    win.configure(bg=CARD)
+    win.title(window_title)
+    win.configure(bg=T.BG)
     win.transient(root)
     win.resizable(False, False)
     win.grab_set()
     root.update_idletasks()
     x = root.winfo_rootx() + (root.winfo_width() - width) // 2
-    y = root.winfo_rooty() + 120
-    win.geometry("%dx%d+%d+%d" % (width, 10, max(0, x), max(0, y)))
-    return win
+    y = root.winfo_rooty() + 90
+    win.geometry("%dx60+%d+%d" % (width, max(0, x), max(0, y)))
+    card = T.Card(win, padding=24)
+    card.pack(fill="both", expand=True, padx=14, pady=14)
+    return win, card.body
+
+
+def _fit(win, width):
+    win.update_idletasks()
+    win.geometry("%dx%d" % (width, win.winfo_reqheight()))
+
+
+def _row(parent, key, value):
+    r = tk.Frame(parent, bg=T.SURFACE)
+    r.pack(fill="x", pady=3)
+    tk.Label(r, text=key, bg=T.SURFACE, fg=T.MUTED, font=T.F_SMALL, width=13,
+             anchor="w").pack(side="left")
+    tk.Label(r, text=value, bg=T.SURFACE, fg=T.FG, font=T.F_BODY,
+             anchor="w").pack(side="left")
 
 
 def consent_dialog(root, request, answer):
-    """Section 10 : consentement explicite, defaut = refus, expiration = refus."""
-    win = _modal(root, "Demande de connexion")
-    win.protocol("WM_DELETE_WINDOW", lambda: _close(False))
+    """Consentement explicite : defaut = refus, expiration = refus."""
+    win, b = _modal(root, "Demande de connexion")
 
-    tk.Label(win, text="Une machine demande a voir votre ecran", bg=CARD,
-             fg=WARN, font=F_TITLE).pack(padx=20, pady=(18, 10))
-    info = tk.Frame(win, bg=CARD)
-    info.pack(fill="x", padx=20)
-    for k, v in (("Client", request["client"]), ("Adresse", request["peer"]),
-                 ("Permissions", "observation seule"
-                  if request.get("view_only") else "controle clavier/souris")):
-        row = tk.Frame(info, bg=CARD)
-        row.pack(fill="x", pady=2)
-        tk.Label(row, text=k, bg=CARD, fg=MUTED, font=F_SMALL,
-                 width=12, anchor="w").pack(side="left")
-        tk.Label(row, text=v, bg=CARD, fg=FG, font=F_BODY,
-                 anchor="w").pack(side="left")
-
-    tk.Label(win, text="Code de verification", bg=CARD, fg=MUTED,
-             font=F_SMALL).pack(pady=(14, 0))
-    tk.Label(win, text=request["sas"], bg=CARD, fg=ACCENT,
-             font=F_SAS).pack()
-    tk.Label(win, text="Il doit etre IDENTIQUE a celui affiche chez le client.\n"
-                       "S'ils different, quelqu'un s'interpose : refusez.",
-             bg=CARD, fg=MUTED, font=F_SMALL, justify="center").pack(pady=(2, 12))
-
-    countdown = tk.StringVar()
-    tk.Label(win, textvariable=countdown, bg=CARD, fg=MUTED,
-             font=F_SMALL).pack()
-
-    row = tk.Frame(win, bg=CARD)
-    row.pack(pady=(10, 18))
-
-    def _close(value):
+    def close(value):
         if not answer.done.is_set():
             answer.set(value)
         try:
@@ -279,67 +205,60 @@ def consent_dialog(root, request, answer):
         except tk.TclError:
             pass
 
-    button(row, "Refuser", lambda: _close(False), "danger",
-           width=12).pack(side="left", padx=6)
-    button(row, "Autoriser", lambda: _close(True), "ok",
-           width=12).pack(side="left", padx=6)
+    win.protocol("WM_DELETE_WINDOW", lambda: close(False))
+
+    tk.Label(b, text="Une machine demande a voir votre ecran", bg=T.SURFACE,
+             fg=T.FG, font=T.F_TITLE).pack(anchor="w")
+    T.hint(b, "Rien ne sera partage tant que vous n'avez pas accepte.").pack(
+        anchor="w", pady=(2, 16))
+
+    _row(b, "Client", request["client"])
+    _row(b, "Adresse", request["peer"])
+    _row(b, "Permissions", "observation seule" if request.get("view_only")
+         else "controle clavier/souris")
+
+    T.separator(b).pack(fill="x", pady=16)
+    tk.Label(b, text="CODE DE VERIFICATION", bg=T.SURFACE, fg=T.MUTED,
+             font=T.F_SMALL).pack()
+    tk.Label(b, text=request["sas"], bg=T.SURFACE, fg=T.ACCENT,
+             font=T.F_SAS).pack(pady=2)
+    tk.Label(b, text="Il doit etre IDENTIQUE a celui affiche chez le client.\n"
+                     "S'ils different, quelqu'un s'interpose : refusez.",
+             bg=T.SURFACE, fg=T.FG_DIM, font=T.F_SMALL,
+             justify="center").pack(pady=(0, 6))
+
+    countdown = tk.StringVar()
+    tk.Label(b, textvariable=countdown, bg=T.SURFACE, fg=T.MUTED,
+             font=T.F_SMALL).pack(pady=(0, 16))
+
+    row = tk.Frame(b, bg=T.SURFACE)
+    row.pack(fill="x")
+    T.RoundButton(row, "Refuser", lambda: close(False), "ghost", width=150,
+                  page_bg=T.SURFACE).pack(side="left", expand=True, fill="x",
+                                          padx=(0, 6))
+    T.RoundButton(row, "Autoriser", lambda: close(True), "primary", width=150,
+                  page_bg=T.SURFACE).pack(side="left", expand=True, fill="x",
+                                          padx=(6, 0))
 
     deadline = time.monotonic() + CONSENT_TIMEOUT
 
     def tick():
         left = deadline - time.monotonic()
         if left <= 0:
-            countdown.set("expire - refus automatique")
-            _close(False)
+            close(False)
             return
-        countdown.set("refus automatique dans %d s" % int(left))
+        countdown.set("Refus automatique dans %d s" % int(left))
         win.after(500, tick)
 
     tick()
-    win.update_idletasks()
-    win.geometry("460x%d" % win.winfo_reqheight())
-    return win
+    _fit(win, 480)
 
 
 def verify_dialog(root, core, status, sas, answer):
     """Verification de l'identite de l'hote, cote client (TOFU)."""
-    win = _modal(root, "Verifier l'hote")
-    win.protocol("WM_DELETE_WINDOW", lambda: _close(False))
+    win, b = _modal(root, "Verifier l'hote")
 
-    heads = {"new": ("Premiere connexion a cette machine", WARN),
-             "match": ("Machine deja connue, empreinte inchangee", OK),
-             "mismatch": ("ALERTE : l'empreinte a change", BAD)}
-    text, color = heads.get(status, heads["new"])
-    tk.Label(win, text=text, bg=CARD, fg=color, font=F_TITLE).pack(
-        padx=20, pady=(18, 10))
-
-    if status == "mismatch":
-        tk.Label(win, text="Cet identifiant etait associe a une AUTRE cle.\n"
-                           "Reinstallation de l'hote... ou interception.\n"
-                           "En cas de doute : refusez.",
-                 bg=CARD, fg=BAD, font=F_SMALL, justify="center").pack(pady=4)
-
-    body = tk.Frame(win, bg=CARD)
-    body.pack(fill="x", padx=20)
-    tk.Label(body, text="Identifiant", bg=CARD, fg=MUTED,
-             font=F_SMALL, anchor="w").pack(fill="x")
-    tk.Label(body, text=core["machine_id"], bg=CARD, fg=FG,
-             font=F_MONO, anchor="w").pack(fill="x")
-    tk.Label(body, text="Empreinte", bg=CARD, fg=MUTED, font=F_SMALL,
-             anchor="w").pack(fill="x", pady=(8, 0))
-    tk.Label(body, text=core["fingerprint"], bg=CARD, fg=FG, font=("Consolas", 9),
-             anchor="w", wraplength=400, justify="left").pack(fill="x")
-
-    tk.Label(win, text="Code de verification", bg=CARD, fg=MUTED,
-             font=F_SMALL).pack(pady=(14, 0))
-    tk.Label(win, text=sas, bg=CARD, fg=ACCENT, font=F_SAS).pack()
-    tk.Label(win, text="Comparez empreinte et code avec l'ecran de l'hote.",
-             bg=CARD, fg=MUTED, font=F_SMALL).pack(pady=(2, 12))
-
-    row = tk.Frame(win, bg=CARD)
-    row.pack(pady=(6, 18))
-
-    def _close(value):
+    def close(value):
         if not answer.done.is_set():
             answer.set(value)
         try:
@@ -348,39 +267,56 @@ def verify_dialog(root, core, status, sas, answer):
         except tk.TclError:
             pass
 
-    button(row, "Annuler", lambda: _close(False), "danger",
-           width=12).pack(side="left", padx=6)
-    button(row, "C'est bien l'hote", lambda: _close(True), "ok",
-           width=16).pack(side="left", padx=6)
-    win.update_idletasks()
-    win.geometry("460x%d" % win.winfo_reqheight())
+    win.protocol("WM_DELETE_WINDOW", lambda: close(False))
+
+    heads = {"new": ("Premiere connexion a cette machine", T.WARN),
+             "match": ("Machine deja connue, empreinte inchangee", T.OK),
+             "mismatch": ("L'empreinte de cette machine a change", T.BAD)}
+    text, color = heads.get(status, heads["new"])
+    tk.Label(b, text=text, bg=T.SURFACE, fg=color, font=T.F_TITLE).pack(
+        anchor="w")
+
+    if status == "mismatch":
+        tk.Label(b, text="Cet identifiant etait associe a une AUTRE cle.\n"
+                         "Reinstallation de l'hote... ou interception.\n"
+                         "En cas de doute, annulez.",
+                 bg=T.SURFACE, fg=T.BAD, font=T.F_SMALL, justify="left",
+                 anchor="w").pack(fill="x", pady=(6, 0))
+
+    T.hint(b, "Comparez ces valeurs avec ce qui s'affiche sur l'autre "
+              "machine.").pack(anchor="w", pady=(2, 14))
+
+    T.hint(b, "IDENTIFIANT").pack(anchor="w")
+    tk.Label(b, text=core["machine_id"], bg=T.SURFACE, fg=T.FG,
+             font=(T.MONO, 13, "bold"), anchor="w").pack(fill="x")
+    T.hint(b, "EMPREINTE").pack(anchor="w", pady=(10, 0))
+    tk.Label(b, text=core["fingerprint"], bg=T.SURFACE, fg=T.FG_DIM,
+             font=(T.MONO, 8), anchor="w", justify="left",
+             wraplength=400).pack(fill="x")
+
+    T.separator(b).pack(fill="x", pady=14)
+    tk.Label(b, text="CODE DE VERIFICATION", bg=T.SURFACE, fg=T.MUTED,
+             font=T.F_SMALL).pack()
+    tk.Label(b, text=sas, bg=T.SURFACE, fg=T.ACCENT, font=T.F_SAS).pack(
+        pady=(2, 16))
+
+    row = tk.Frame(b, bg=T.SURFACE)
+    row.pack(fill="x")
+    T.RoundButton(row, "Annuler", lambda: close(False), "ghost", width=150,
+                  page_bg=T.SURFACE).pack(side="left", expand=True, fill="x",
+                                          padx=(0, 6))
+    T.RoundButton(row, "C'est bien l'hote", lambda: close(True), "primary",
+                  width=170, page_bg=T.SURFACE).pack(side="left", expand=True,
+                                                     fill="x", padx=(6, 0))
+    _fit(win, 480)
     return win
 
 
-def password_dialog(root, answer, title="Mot de passe de l'hote",
+def password_dialog(root, answer, window_title="Mot de passe de l'hote",
                     confirm=False):
-    win = _modal(root, title)
-    win.protocol("WM_DELETE_WINDOW", lambda: _close(None))
-    tk.Label(win, text=title, bg=CARD, fg=ACCENT, font=F_TITLE).pack(
-        padx=20, pady=(18, 4))
-    hint = ("10 caracteres minimum. Il protege l'acces a votre ecran :\n"
-            "il doit etre different de votre mot de passe de session."
-            if confirm else
-            "Il ne quittera jamais cette machine : seule une preuve\n"
-            "cryptographique est transmise.")
-    tk.Label(win, text=hint, bg=CARD, fg=MUTED, font=F_SMALL,
-             justify="center").pack(pady=(0, 12))
+    win, b = _modal(root, window_title, 440)
 
-    v1 = tk.StringVar()
-    v2 = tk.StringVar()
-    e1 = entry(win, v1, width=32, show="*")
-    e1.pack(pady=4)
-    if confirm:
-        entry(win, v2, width=32, show="*").pack(pady=4)
-    err = tk.StringVar()
-    tk.Label(win, textvariable=err, bg=CARD, fg=BAD, font=F_SMALL).pack()
-
-    def _close(value):
+    def close(value):
         if not answer.done.is_set():
             answer.set(value)
         try:
@@ -389,7 +325,27 @@ def password_dialog(root, answer, title="Mot de passe de l'hote",
         except tk.TclError:
             pass
 
-    def _ok():
+    win.protocol("WM_DELETE_WINDOW", lambda: close(None))
+
+    tk.Label(b, text=window_title, bg=T.SURFACE, fg=T.FG,
+             font=T.F_TITLE).pack(anchor="w")
+    T.hint(b, "10 caracteres minimum. Il protege l'acces a votre ecran :\n"
+              "choisissez-en un different de celui de votre session Windows."
+           if confirm else
+           "Il ne quittera jamais cette machine : seule une preuve\n"
+           "cryptographique est transmise.").pack(anchor="w", pady=(4, 14))
+
+    v1, v2 = tk.StringVar(), tk.StringVar()
+    e1 = T.entry(b, v1, show="•")
+    e1.pack(fill="x", ipady=7)
+    if confirm:
+        T.hint(b, "Confirmation").pack(anchor="w", pady=(10, 2))
+        T.entry(b, v2, show="•").pack(fill="x", ipady=7)
+    err = tk.StringVar()
+    tk.Label(b, textvariable=err, bg=T.SURFACE, fg=T.BAD,
+             font=T.F_SMALL, anchor="w").pack(fill="x", pady=(6, 0))
+
+    def ok():
         if confirm:
             if len(v1.get()) < 10:
                 err.set("10 caracteres minimum")
@@ -397,17 +353,19 @@ def password_dialog(root, answer, title="Mot de passe de l'hote",
             if v1.get() != v2.get():
                 err.set("les deux saisies different")
                 return
-        _close(v1.get())
+        close(v1.get())
 
-    row = tk.Frame(win, bg=CARD)
-    row.pack(pady=(12, 18))
-    button(row, "Annuler", lambda: _close(None), "normal",
-           width=10).pack(side="left", padx=6)
-    button(row, "Valider", _ok, "primary", width=10).pack(side="left", padx=6)
-    e1.bind("<Return>", lambda e: _ok())
+    row = tk.Frame(b, bg=T.SURFACE)
+    row.pack(fill="x", pady=(14, 0))
+    T.RoundButton(row, "Annuler", lambda: close(None), "ghost", width=130,
+                  page_bg=T.SURFACE).pack(side="left", expand=True, fill="x",
+                                          padx=(0, 6))
+    T.RoundButton(row, "Valider", ok, "primary", width=130,
+                  page_bg=T.SURFACE).pack(side="left", expand=True, fill="x",
+                                          padx=(6, 0))
+    e1.bind("<Return>", lambda e: ok())
     e1.focus_set()
-    win.update_idletasks()
-    win.geometry("420x%d" % win.winfo_reqheight())
+    _fit(win, 440)
     return win
 
 
@@ -418,8 +376,8 @@ def password_dialog(root, answer, title="Mot de passe de l'hote",
 class GuiHooks(host.HostHooks):
     """Traduit les evenements du moteur en actions sur l'interface.
 
-    Aucun widget n'est touche ici : tout passe par app._ui(), qui
-    reporte l'appel sur la boucle tkinter."""
+    Aucun widget n'est touche ici : tout passe par app._ui(), qui reporte
+    l'appel sur la boucle tkinter."""
 
     def __init__(self, app):
         self.app = app
@@ -446,21 +404,18 @@ class RdlabApp:
         self.creds = auth.CredentialStore()
         self.prefs = prefs_mod.Prefs()
         self.service = None
-        self.service_thread = None
         self.viewer_ctrl = None
         self.session_active = False
 
         self.root = tk.Tk()
-        self.root.title("%s - bureau a distance (laboratoire)" % APP_NAME)
-        self.root.geometry("760x700")
-        self.root.minsize(700, 560)
-        self.root.configure(bg=BG)
-        self._init_style()
+        self.root.title("%s - bureau a distance" % APP_NAME)
+        self.root.geometry("880x760")
+        self.root.minsize(760, 600)
+        self.root.configure(bg=T.BG)
         self._build()
         self._refresh_credentials()
         self.root.protocol("WM_DELETE_WINDOW", self._on_quit)
 
-    # -- utilitaires --------------------------------------------------
     def _ui(self, fn, *args):
         """Reporte un appel sur le fil de l'interface. Seul point de
         passage autorise depuis un fil de fond."""
@@ -469,247 +424,234 @@ class RdlabApp:
         except RuntimeError:
             pass
 
-    def _init_style(self):
-        style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure("TNotebook", background=BG, borderwidth=0)
-        style.configure("TNotebook.Tab", background=CARD, foreground=MUTED,
-                        padding=(18, 9), font=F_BODY, borderwidth=0)
-        style.map("TNotebook.Tab", background=[("selected", BG)],
-                  foreground=[("selected", ACCENT)])
-        style.configure("TCombobox", fieldbackground=BG, background=CARD,
-                        foreground=FG, arrowcolor=FG)
-
-    # -- construction -------------------------------------------------
+    # -- structure -----------------------------------------------------
     def _build(self):
-        self.banner = tk.Frame(self.root, bg=CARD, height=54)
-        self.banner.pack(fill="x")
-        self.banner.pack_propagate(False)
-        self.banner_text = tk.StringVar(
-            value="Laboratoire pedagogique - reseau de test uniquement")
-        self.banner_label = tk.Label(self.banner, textvariable=self.banner_text,
-                                     bg=CARD, fg=MUTED, font=F_BODY,
-                                     anchor="w")
-        self.banner_label.pack(side="left", padx=18)
-        tk.Label(self.banner, text=APP_NAME, bg=CARD, fg=ACCENT,
-                 font=("Segoe UI Semibold", 16)).pack(side="right", padx=18)
+        header = tk.Frame(self.root, bg=T.BG)
+        header.pack(fill="x", padx=26, pady=(20, 4))
+        left = tk.Frame(header, bg=T.BG)
+        left.pack(side="left")
+        T.Logo(left).pack(side="left", padx=(0, 10))
+        tk.Label(left, text=APP_NAME, bg=T.BG, fg=T.FG,
+                 font=(T.FONT, 17, "bold")).pack(side="left")
+        self.state_pill = T.Pill(header)
+        self.state_pill.pack(side="right", pady=4)
+        self.state_pill.set("Inactif", T.MUTED, T.SURFACE_2)
 
-        nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=14, pady=14)
-        share_scroll = ScrollFrame(nb)
-        connect_scroll = ScrollFrame(nb)
-        self.tab_share = share_scroll.body
-        self.tab_connect = connect_scroll.body
-        self.tab_log = tk.Frame(nb, bg=BG)
-        nb.add(share_scroll, text="Partager mon ecran")
-        nb.add(connect_scroll, text="Se connecter")
-        nb.add(self.tab_log, text="Journal")
-        nb.enable_traversal()          # Ctrl+Tab entre les onglets
-        nb.bind("<<NotebookTabChanged>>", lambda e: self._refresh_log())
-        self._build_share()
-        self._build_connect()
-        self._build_log()
+        nav = tk.Frame(self.root, bg=T.BG)
+        nav.pack(fill="x", padx=26, pady=(10, 0))
+        self.tabs = T.NavTabs(nav, ["Partager mon ecran", "Se connecter",
+                                    "Journal"], self._on_tab)
+        self.tabs.pack(side="left")
 
-    # ---------------------------------------------------------- PARTAGE
-    def _build_share(self):
-        """Ecran principal du partage : identifiant, antenne, un bouton.
+        self.alert = tk.Frame(self.root, bg=T.BG)
+        self.alert_card = T.Card(self.alert, fill=T.BAD, outline=T.BAD,
+                                 padding=13)
+        self.alert_card.pack(fill="x")
+        self.alert_text = tk.Label(self.alert_card.body, text="", bg=T.BAD,
+                                   fg="#FFFFFF", font=T.F_BODY_B, anchor="w")
+        self.alert_text.pack(fill="x")
 
-        Tout le reste (mot de passe, permissions, reseau local, empreinte)
-        est replie. Quelqu'un qui a deja configure sa machine ne voit que
-        ce dont il a besoin pour demarrer."""
-        root = self.tab_share
+        self.pages = tk.Frame(self.root, bg=T.BG)
+        self.pages.pack(fill="both", expand=True, padx=26, pady=(14, 20))
+        self._scrolls = []
+        self._page_frames = []
+        for _ in range(3):
+            sc = ScrollFrame(self.pages)
+            self._scrolls.append(sc)
+            self._page_frames.append(sc.body)
+        self._build_share(self._page_frames[0])
+        self._build_connect(self._page_frames[1])
+        self._build_log(self._page_frames[2])
+        self._scrolls[0].pack(fill="both", expand=True)
+        self._current = 0
 
-        top = card(root)
-        top.pack(fill="x", pady=(0, 12))
-        inner = tk.Frame(top, bg=CARD)
-        inner.pack(fill="x", padx=16, pady=14)
-        label(inner, "Identifiant de cette machine", MUTED, F_SMALL).pack(
-            fill="x")
-        idrow = tk.Frame(inner, bg=CARD)
-        idrow.pack(fill="x")
-        tk.Label(idrow, text=self.device.machine_id, bg=CARD, fg=FG,
-                 font=F_ID).pack(side="left")
-        button(idrow, "Copier", self._copy_id).pack(side="left", padx=14)
-        label(inner, "A communiquer a la personne qui se connecte.",
-              MUTED, F_SMALL).pack(fill="x")
+    def _on_tab(self, index):
+        self._scrolls[self._current].pack_forget()
+        self._scrolls[index].pack(fill="both", expand=True)
+        self._current = index
+        if index == 2:
+            self._refresh_log()
 
-        net = card(root)
-        net.pack(fill="x", pady=(0, 12))
-        body = tk.Frame(net, bg=CARD)
-        body.pack(fill="x", padx=16, pady=14)
+    # -- ecran : partager ----------------------------------------------
+    def _build_share(self, root):
+        T.title(root, "Partager mon ecran").pack(anchor="w", pady=(0, 4))
+        tk.Label(root, text="Donnez votre identifiant a la personne qui doit "
+                            "se connecter.", bg=T.BG, fg=T.FG_DIM,
+                 font=T.F_BODY, anchor="w").pack(fill="x", pady=(0, 16))
+
+        idc = T.Card(root, padding=22)
+        idc.pack(fill="x", pady=(0, 12))
+        b = idc.body
+        T.hint(b, "IDENTIFIANT DE CETTE MACHINE").pack(anchor="w")
+        row = tk.Frame(b, bg=T.SURFACE)
+        row.pack(fill="x", pady=(4, 0))
+        tk.Label(row, text=self.device.machine_id, bg=T.SURFACE, fg=T.FG,
+                 font=T.F_ID).pack(side="left")
+        T.RoundButton(row, "Copier", self._copy_id, "ghost", height=36,
+                      width=94, page_bg=T.SURFACE).pack(side="left", padx=16)
+
+        netc = T.Card(root, padding=22)
+        netc.pack(fill="x", pady=(0, 12))
+        b = netc.body
         self.mode_var = tk.StringVar(value=self.prefs.get("share_mode"))
         self.relay_var = tk.StringVar(value=self.prefs.get("relay"))
-        label(body, "Adresse de votre antenne", MUTED, F_SMALL).pack(fill="x")
-        self.relay_entry = entry(body, self.relay_var, 40)
-        self.relay_entry.pack(fill="x", pady=(2, 4))
+        T.hint(b, "ADRESSE DE VOTRE ANTENNE").pack(anchor="w")
+        self.relay_entry = T.entry(b, self.relay_var)
+        self.relay_entry.pack(fill="x", ipady=7, pady=(4, 6))
         self.relay_entry.bind("<FocusOut>", lambda e: self.prefs.set(
             "relay", self.relay_var.get().strip()))
-        label(body, "Retenue pour les prochaines fois.", MUTED,
-              F_SMALL).pack(fill="x")
+        T.hint(b, "Retenue pour les prochaines fois.").pack(anchor="w")
 
         self.pw_state = tk.StringVar()
-        self.pw_label = tk.Label(root, textvariable=self.pw_state, bg=BG,
-                                 fg=FG, font=F_BODY, anchor="w")
-        self.pw_label.pack(fill="x", pady=(0, 6))
+        self.pw_label = tk.Label(root, textvariable=self.pw_state, bg=T.BG,
+                                 fg=T.FG_DIM, font=T.F_BODY, anchor="w")
+        self.pw_label.pack(fill="x", pady=(0, 8))
 
-        self.share_btn = big_button(root, "Demarrer le partage",
-                                    self._toggle_share)
+        self.share_btn = T.RoundButton(root, "Demarrer le partage",
+                                       self._toggle_share, "primary",
+                                       height=50, radius=13)
         self.share_btn.pack(fill="x")
-        self.host_status = tk.StringVar(value="a l arret")
-        tk.Label(root, textvariable=self.host_status, bg=BG, fg=MUTED,
-                 font=F_BODY, anchor="w").pack(fill="x", pady=(8, 10))
-        self.endsession_btn = button(root, "Terminer la session",
-                                     self._end_session, "normal", width=20)
+
+        self.host_status = tk.StringVar(value="A l'arret")
+        tk.Label(root, textvariable=self.host_status, bg=T.BG, fg=T.MUTED,
+                 font=T.F_SMALL, anchor="w").pack(fill="x", pady=(10, 4))
+
+        self.endsession_btn = T.RoundButton(root, "Terminer la session",
+                                            self._end_session, "danger",
+                                            height=40, width=200)
         self._set_endsession(False)
 
-        # ---- replie : tout ce qui ne sert pas a chaque lancement
         adv = Collapsible(root, "Options avancees")
-        adv.pack(fill="x", pady=(0, 10))
-        a = tk.Frame(adv.body, bg=CARD)
-        a.pack(fill="x", padx=16, pady=12)
-
-        row = tk.Frame(a, bg=CARD)
-        row.pack(fill="x", pady=(0, 8))
-        button(row, "Definir le mot de passe",
-               self._set_password).pack(side="left")
+        adv.pack(fill="x", pady=(10, 0))
+        a = adv.body
+        T.RoundButton(a, "Definir le mot de passe d'acces", self._set_password,
+                      "ghost", height=38, width=250,
+                      page_bg=T.SURFACE).pack(anchor="w", pady=(0, 12))
 
         self.viewonly_var = tk.BooleanVar(value=self.prefs.get("view_only"))
-        self._check(a, "Observation seule (ne pas appliquer clavier/souris)",
-                    self.viewonly_var,
-                    lambda: self.prefs.set("view_only",
-                                           self.viewonly_var.get())).pack(
-            fill="x")
-
+        T.check(a, "Observation seule (ne pas appliquer clavier et souris)",
+                self.viewonly_var,
+                lambda: self.prefs.set("view_only",
+                                       self.viewonly_var.get())).pack(fill="x")
         self.unattended_var = tk.BooleanVar(value=self.creds.unattended)
-        self._check(a, "Accepter sans me demander (acces sans surveillance)",
-                    self.unattended_var, self._toggle_unattended).pack(
+        T.check(a, "Accepter sans me demander (acces sans surveillance)",
+                self.unattended_var, self._toggle_unattended).pack(
             fill="x", pady=(6, 0))
-        label(a, "Desactive par defaut. Exige un mot de passe. Toutes les "
-                 "sessions restent journalisees.", MUTED, F_SMALL).pack(
-            fill="x", padx=22)
+        T.hint(a, "Desactive par defaut, exige un mot de passe. Toutes les "
+                  "sessions restent journalisees.").pack(fill="x", padx=24)
 
-        tk.Frame(a, bg=EDGE, height=1).pack(fill="x", pady=10)
-        self._radio(a, "Passer par l'antenne (recommande)", self.mode_var,
-                    "relay", self._refresh_mode).pack(fill="x")
-        self._radio(a, "Reseau local uniquement (ecouter un port)",
-                    self.mode_var, "direct", self._refresh_mode).pack(fill="x")
-        lan = tk.Frame(a, bg=CARD)
-        lan.pack(fill="x", padx=22, pady=(2, 0))
+        T.separator(a).pack(fill="x", pady=14)
+        T.radio(a, "Passer par l'antenne (recommande)", self.mode_var, "relay",
+                self._refresh_mode).pack(fill="x")
+        T.radio(a, "Reseau local uniquement (ecouter un port)", self.mode_var,
+                "direct", self._refresh_mode).pack(fill="x")
+        lan = tk.Frame(a, bg=T.SURFACE)
+        lan.pack(fill="x", padx=24, pady=(6, 0))
         self.bind_var = tk.StringVar(value=self._guess_lan_ip())
         self.port_var = tk.StringVar(value=self.prefs.get("lan_port"))
-        label(lan, "Adresse :", MUTED, F_SMALL).pack(side="left")
-        self.bind_entry = entry(lan, self.bind_var, 16)
-        self.bind_entry.pack(side="left", padx=8)
-        label(lan, "Port :", MUTED, F_SMALL).pack(side="left")
-        self.port_entry = entry(lan, self.port_var, 7)
-        self.port_entry.pack(side="left", padx=8)
+        T.hint(lan, "Adresse").pack(side="left")
+        self.bind_entry = T.entry(lan, self.bind_var, width=16)
+        self.bind_entry.pack(side="left", padx=8, ipady=4)
+        T.hint(lan, "Port").pack(side="left", padx=(8, 0))
+        self.port_entry = T.entry(lan, self.port_var, width=7)
+        self.port_entry.pack(side="left", padx=8, ipady=4)
 
-        tk.Frame(a, bg=EDGE, height=1).pack(fill="x", pady=10)
-        label(a, "Empreinte de cette machine", MUTED, F_SMALL).pack(fill="x")
-        fp = tk.Frame(a, bg=CARD)
-        fp.pack(fill="x")
-        tk.Label(fp, text=self.device.fingerprint, bg=CARD, fg=ACCENT,
-                 font=("Consolas", 8), anchor="w", justify="left",
-                 wraplength=500).pack(side="left")
-        button(fp, "Copier", self._copy_fingerprint).pack(side="left", padx=10)
+        T.separator(a).pack(fill="x", pady=14)
+        T.hint(a, "EMPREINTE DE CETTE MACHINE").pack(anchor="w")
+        fp = tk.Frame(a, bg=T.SURFACE)
+        fp.pack(fill="x", pady=(4, 0))
+        tk.Label(fp, text=self.device.fingerprint, bg=T.SURFACE, fg=T.FG_DIM,
+                 font=(T.MONO, 8), anchor="w", justify="left",
+                 wraplength=440).pack(side="left")
+        T.RoundButton(fp, "Copier", self._copy_fingerprint, "ghost",
+                      height=32, width=84, page_bg=T.SURFACE).pack(side="left",
+                                                                   padx=12)
 
         det = Collapsible(root, "Details techniques")
-        det.pack(fill="x", pady=(0, 12))
+        det.pack(fill="x", pady=(4, 0))
         self.host_console = ConsoleBox(det.body, height=9)
-        self.host_console.pack(fill="x", padx=2, pady=2)
+        self.host_console.pack(fill="x")
         self._refresh_mode()
 
-    def _check(self, parent, text, var, command):
-        return tk.Checkbutton(parent, text=text, variable=var,
-                              command=command, bg=CARD, fg=FG, selectcolor=BG,
-                              activebackground=CARD, activeforeground=FG,
-                              font=F_BODY, anchor="w", highlightthickness=0,
-                              borderwidth=0)
+    # -- ecran : se connecter ------------------------------------------
+    def _build_connect(self, root):
+        T.title(root, "Se connecter").pack(anchor="w", pady=(0, 4))
+        tk.Label(root, text="Saisissez l'identifiant affiche sur la machine a "
+                            "joindre.", bg=T.BG, fg=T.FG_DIM, font=T.F_BODY,
+                 anchor="w").pack(fill="x", pady=(0, 16))
 
-    def _radio(self, parent, text, var, value, command):
-        return tk.Radiobutton(parent, text=text, variable=var, value=value,
-                              command=command, bg=CARD, fg=FG, selectcolor=BG,
-                              activebackground=CARD, activeforeground=FG,
-                              font=F_BODY, anchor="w", highlightthickness=0,
-                              borderwidth=0)
-
-    def _build_connect(self):
-        """Ecran client : un identifiant, une antenne, un bouton."""
-        root = self.tab_connect
-
-        c = card(root)
+        c = T.Card(root, padding=22)
         c.pack(fill="x", pady=(0, 12))
-        body = tk.Frame(c, bg=CARD)
-        body.pack(fill="x", padx=16, pady=14)
-
-        label(body, "Identifiant de la machine a joindre", MUTED,
-              F_SMALL).pack(fill="x")
+        b = c.body
+        T.hint(b, "IDENTIFIANT DE LA MACHINE").pack(anchor="w")
         self.target_var = tk.StringVar(value=self.prefs.get("last_target"))
-        self.target_entry = entry(body, self.target_var, 40)
-        self.target_entry.pack(fill="x", pady=(2, 2))
-        self.target_hint = label(body, "Les 9 chiffres affiches sur l autre "
-                                       "machine.", MUTED, F_SMALL)
-        self.target_hint.pack(fill="x")
+        self.target_entry = T.entry(b, self.target_var)
+        self.target_entry.pack(fill="x", ipady=9, pady=(4, 4))
+        self.target_hint = T.hint(
+            b, "Les 9 chiffres affiches sur l'autre machine.")
+        self.target_hint.pack(anchor="w")
 
-        label(body, "Adresse de votre antenne", MUTED, F_SMALL).pack(
-            fill="x", pady=(12, 0))
+        T.hint(b, "ADRESSE DE VOTRE ANTENNE").pack(anchor="w", pady=(16, 0))
         self.cvia_var = tk.StringVar(value=self.prefs.get("connect_relay")
                                      or self.prefs.get("relay"))
-        self.cvia_entry = entry(body, self.cvia_var, 40)
-        self.cvia_entry.pack(fill="x", pady=(2, 0))
+        self.cvia_entry = T.entry(b, self.cvia_var)
+        self.cvia_entry.pack(fill="x", ipady=7, pady=(4, 0))
         self.cvia_entry.bind("<FocusOut>", lambda e: self.prefs.set(
             "connect_relay", self.cvia_var.get().strip()))
 
-        self.connect_btn = big_button(root, "Se connecter", self._do_connect)
+        self.connect_btn = T.RoundButton(root, "Se connecter",
+                                         self._do_connect, "primary",
+                                         height=50, radius=13)
         self.connect_btn.pack(fill="x")
-        self.client_status = tk.StringVar(value="pret")
-        tk.Label(root, textvariable=self.client_status, bg=BG, fg=MUTED,
-                 font=F_BODY, anchor="w").pack(fill="x", pady=(8, 10))
+        self.client_status = tk.StringVar(value="Pret")
+        tk.Label(root, textvariable=self.client_status, bg=T.BG, fg=T.MUTED,
+                 font=T.F_SMALL, anchor="w").pack(fill="x", pady=(10, 0))
 
         adv = Collapsible(root, "Options avancees")
-        adv.pack(fill="x", pady=(0, 10))
-        a = tk.Frame(adv.body, bg=CARD)
-        a.pack(fill="x", padx=16, pady=12)
+        adv.pack(fill="x", pady=(10, 0))
+        a = adv.body
         self.cmode_var = tk.StringVar(value=self.prefs.get("connect_mode"))
-        self._radio(a, "Passer par l'antenne (recommande)", self.cmode_var,
-                    "relay", self._refresh_cmode).pack(fill="x")
-        self._radio(a, "Reseau local (saisir une adresse IP)", self.cmode_var,
-                    "direct", self._refresh_cmode).pack(fill="x")
-        row = tk.Frame(a, bg=CARD)
-        row.pack(fill="x", padx=22, pady=(2, 10))
+        T.radio(a, "Passer par l'antenne (recommande)", self.cmode_var,
+                "relay", self._refresh_cmode).pack(fill="x")
+        T.radio(a, "Reseau local (saisir une adresse IP)", self.cmode_var,
+                "direct", self._refresh_cmode).pack(fill="x")
+        row = tk.Frame(a, bg=T.SURFACE)
+        row.pack(fill="x", padx=24, pady=(6, 14))
+        T.hint(row, "Port").pack(side="left")
         self.cport_var = tk.StringVar(value=self.prefs.get("connect_port"))
-        label(row, "Port :", MUTED, F_SMALL).pack(side="left")
-        self.cport_entry = entry(row, self.cport_var, 7)
-        self.cport_entry.pack(side="left", padx=8)
+        self.cport_entry = T.entry(row, self.cport_var, width=7)
+        self.cport_entry.pack(side="left", padx=8, ipady=4)
 
-        row = tk.Frame(a, bg=CARD)
+        row = tk.Frame(a, bg=T.SURFACE)
         row.pack(fill="x")
-        label(row, "Qualite :", MUTED, F_SMALL).pack(side="left")
+        T.hint(row, "Qualite").pack(side="left")
         self.quality_var = tk.StringVar(value=self.prefs.get("quality"))
-        combo = ttk.Combobox(row, textvariable=self.quality_var, width=12,
-                             state="readonly",
-                             values=["low", "balanced", "high"])
-        combo.pack(side="left", padx=8)
-        combo.bind("<<ComboboxSelected>>", lambda e: self.prefs.set(
-            "quality", self.quality_var.get()))
+        for value, text in (("low", "Fluide"), ("balanced", "Equilibre"),
+                            ("high", "Nette")):
+            T.radio(row, text, self.quality_var, value,
+                    lambda: self.prefs.set("quality",
+                                           self.quality_var.get())).pack(
+                side="left", padx=(12, 0))
 
         det = Collapsible(root, "Details techniques")
-        det.pack(fill="x", pady=(0, 12))
+        det.pack(fill="x", pady=(4, 0))
         self.client_console = ConsoleBox(det.body, height=12)
-        self.client_console.pack(fill="x", padx=2, pady=2)
+        self.client_console.pack(fill="x")
         self._refresh_cmode()
 
-    def _build_log(self):
-        root = self.tab_log
-        head = tk.Frame(root, bg=BG)
-        head.pack(fill="x", pady=(0, 8))
-        tk.Label(head, text="Journal des connexions - rdlab-data/sessions.log",
-                 bg=BG, fg=MUTED, font=F_BODY).pack(side="left")
-        button(head, "Rafraichir", self._refresh_log).pack(side="right")
-        self.log_box = ConsoleBox(root, height=24)
+    # -- ecran : journal -----------------------------------------------
+    def _build_log(self, root):
+        head = tk.Frame(root, bg=T.BG)
+        head.pack(fill="x", pady=(0, 4))
+        T.title(head, "Journal").pack(side="left")
+        T.RoundButton(head, "Rafraichir", self._refresh_log, "ghost",
+                      height=36, width=120).pack(side="right")
+        tk.Label(root, text="Toutes les connexions, acceptees comme refusees.",
+                 bg=T.BG, fg=T.FG_DIM, font=T.F_BODY, anchor="w").pack(
+            fill="x", pady=(0, 16))
+        card = T.Card(root, padding=6)
+        card.pack(fill="x")
+        self.log_box = ConsoleBox(card.body, height=26)
         self.log_box.pack(fill="both", expand=True)
 
     def _refresh_log(self):
@@ -718,7 +660,7 @@ class RdlabApp:
         self.log_box.clear()
         entries = session_log.tail(300)
         if not entries:
-            self.log_box.write("journal vide", "info")
+            self.log_box.write("Aucune connexion enregistree.", "info")
             return
         tags = {"auth_failed": "bad", "handshake_failed": "bad",
                 "session_error": "bad", "consent": "warn",
@@ -730,13 +672,13 @@ class RdlabApp:
             self.log_box.write("%s  %-20s %s" % (e["ts"], e["event"], rest),
                                tags.get(e["event"], "info"))
 
-    # -- etat / rafraichissements -------------------------------------
+    # -- etat -----------------------------------------------------------
     def _guess_lan_ip(self):
-        """Adresse LAN probable. Aucun paquet n'est reellement emis :
-        connect() sur UDP ne fait que choisir une route."""
+        """Adresse LAN probable. Aucun paquet n'est emis : connect() sur
+        UDP ne fait que choisir une route."""
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            s.connect(("192.0.2.1", 9))     # reseau de documentation, RFC 5737
+            s.connect(("192.0.2.1", 9))   # reseau de documentation, RFC 5737
             return s.getsockname()[0]
         except OSError:
             return "127.0.0.1"
@@ -745,15 +687,14 @@ class RdlabApp:
 
     def _refresh_credentials(self):
         if self.creds.has_password:
-            self.pw_state.set("Mot de passe d acces : defini")
-            self.pw_label.configure(fg=OK)
-            self.share_btn.configure(state="normal")
+            self.pw_state.set("Mot de passe d'acces defini")
+            self.pw_label.configure(fg=T.OK)
+            self.share_btn.set_state("normal")
         else:
-            self.pw_state.set(
-                "Definissez d abord un mot de passe d acces "
-                "(Options avancees)")
-            self.pw_label.configure(fg=WARN)
-            self.share_btn.configure(state="disabled")
+            self.pw_state.set("Definissez d'abord un mot de passe d'acces "
+                              "(Options avancees)")
+            self.pw_label.configure(fg=T.WARN)
+            self.share_btn.set_state("disabled")
         self.unattended_var.set(self.creds.unattended)
 
     def _refresh_mode(self):
@@ -768,46 +709,45 @@ class RdlabApp:
         self.cvia_entry.configure(state="normal" if relay else "disabled")
         self.cport_entry.configure(state="disabled" if relay else "normal")
         self.target_hint.configure(
-            text="Les 9 chiffres affiches sur l autre machine." if relay
-            else "L adresse IP de l autre machine sur votre reseau local.")
+            text="Les 9 chiffres affiches sur l'autre machine." if relay
+            else "L'adresse IP de l'autre machine sur votre reseau local.")
         self.prefs.set("connect_mode", self.cmode_var.get())
 
     def _set_endsession(self, active):
-        """Le coupe-circuit n'existe que pendant une session.
-
-        Un bouton grise en permanence est du bruit sur un ecran qu'on veut
-        minimal -- et, colore en rouge, il laisserait croire qu'une session
-        est en cours."""
+        """Le coupe-circuit n'existe que pendant une session : un bouton
+        rouge permanent laisserait croire qu'une session est en cours."""
         if active:
-            self.endsession_btn.configure(state="normal", bg=BAD,
-                                          activebackground=BAD, fg="#160d10")
-            self.endsession_btn.pack(anchor="w", pady=(0, 10))
+            self.endsession_btn.pack(anchor="w", pady=(6, 0))
         else:
             self.endsession_btn.pack_forget()
 
-    def _set_banner(self, text, color, bg=CARD):
-        self.banner_text.set(text)
-        self.banner_label.configure(fg=color, bg=bg)
-        self.banner.configure(bg=bg)
-        for child in self.banner.winfo_children():
-            child.configure(bg=bg)
+    def _set_alert(self, text=None):
+        """Bandeau rouge de non-furtivite. Absent = rien n'est partage."""
+        if text:
+            self.alert_text.configure(text=text)
+            # `before` plutot qu'un index de widget : l'ordre d'empilement
+            # reste correct meme si la structure de la fenetre evolue.
+            self.alert.pack(fill="x", padx=26, pady=(12, 0),
+                            before=self.pages)
+        else:
+            self.alert.pack_forget()
 
-    # -- actions : securite -------------------------------------------
+    # -- actions : securite ---------------------------------------------
     def _copy_id(self):
         self.root.clipboard_clear()
         self.root.clipboard_append(self.device.machine_id)
-        self.host_console.write("identifiant copie", "accent")
+        self.host_console.write("Identifiant copie.", "accent")
 
     def _copy_fingerprint(self):
         self.root.clipboard_clear()
         self.root.clipboard_append(self.device.fingerprint)
-        self.host_console.write("empreinte copiee", "accent")
+        self.host_console.write("Empreinte copiee.", "accent")
 
     def _set_password(self):
         answer = ModalAnswer(default=None)
         win = password_dialog(self.root, answer,
                               "Definir le mot de passe d'acces", confirm=True)
-        self.root.wait_window(win)      # on est sur le fil interface : on peut
+        self.root.wait_window(win)      # on est sur le fil interface
         pw = answer.value
         if not pw:
             return
@@ -817,7 +757,7 @@ class RdlabApp:
             self.host_console.write(str(exc), "bad")
             return
         session_log.log("password_changed")
-        self.host_console.write("mot de passe enregistre (scrypt N=32768)",
+        self.host_console.write("Mot de passe enregistre (scrypt N=32768).",
                                 "good")
         self._refresh_credentials()
 
@@ -826,11 +766,12 @@ class RdlabApp:
             if self.unattended_var.get():
                 self.creds.enable_unattended()
                 self.host_console.write(
-                    "acces sans surveillance ACTIVE - les connexions "
-                    "authentifiees seront acceptees sans vous demander", "warn")
+                    "Acces sans surveillance ACTIVE : les connexions "
+                    "authentifiees seront acceptees sans vous demander.",
+                    "warn")
             else:
                 self.creds.disable_unattended()
-                self.host_console.write("acces sans surveillance desactive",
+                self.host_console.write("Acces sans surveillance desactive.",
                                         "good")
             session_log.log("unattended_changed",
                             value="on" if self.unattended_var.get() else "off")
@@ -838,7 +779,7 @@ class RdlabApp:
             self.host_console.write(str(exc), "bad")
         self._refresh_credentials()
 
-    # -- actions : partage ---------------------------------------------
+    # -- actions : partage -----------------------------------------------
     def _toggle_share(self):
         if self.service:
             self._stop_share()
@@ -848,14 +789,14 @@ class RdlabApp:
     def _start_share(self):
         if not self.creds.has_password:
             self.host_console.write(
-                "definissez d'abord un mot de passe d'acces", "bad")
+                "Definissez d'abord un mot de passe d'acces.", "bad")
             return
         relay = None
         bind, port = "127.0.0.1", 7700
         if self.mode_var.get() == "relay":
             relay = self.relay_var.get().strip()
             if not relay:
-                self.host_console.write("indiquez l'adresse de l'antenne",
+                self.host_console.write("Indiquez l'adresse de l'antenne.",
                                         "bad")
                 return
         else:
@@ -863,7 +804,7 @@ class RdlabApp:
             try:
                 port = int(self.port_var.get())
             except ValueError:
-                self.host_console.write("port invalide", "bad")
+                self.host_console.write("Port invalide.", "bad")
                 return
 
         self.prefs.set("relay", relay or self.prefs.get("relay"))
@@ -872,39 +813,38 @@ class RdlabApp:
                                    view_only=self.viewonly_var.get())
         self.service = host.HostService(self.device, self.creds, options,
                                         GuiHooks(self))
-        self.service_thread = threading.Thread(target=self._run_service,
-                                               daemon=True)
-        self.service_thread.start()
-        self.share_btn.configure(text="Arreter le partage", bg=BAD,
-                                 activebackground=BAD, fg="#160d10")
-        self._set_banner("PARTAGE ACTIF - cet ordinateur peut etre observe",
-                         WARN)
+        threading.Thread(target=self._run_service, daemon=True).start()
+        self.share_btn.set_text("Arreter le partage")
+        self.share_btn.set_kind("danger")
+        self.state_pill.set("Partage actif", "#FFFFFF", T.ACCENT)
+        self._set_alert("PARTAGE ACTIF - cet ordinateur peut etre observe")
         self.host_console.write(
-            "partage demarre (%s)" % ("antenne %s" % relay if relay
-                                      else "%s:%d" % (bind, port)), "good")
+            "Partage demarre (%s)." % ("antenne %s" % relay if relay
+                                       else "%s:%d" % (bind, port)), "good")
 
     def _run_service(self):
         try:
             self.service.start()
         except Exception as exc:
-            self._ui(self.host_console.write, "moteur arrete : %s" % exc, "bad")
+            self._ui(self.host_console.write, "Moteur arrete : %s" % exc,
+                     "bad")
         finally:
             self._ui(self._on_service_stopped)
 
     def _stop_share(self):
         if self.service:
             self.service.stop()
-        self.host_console.write("arret demande", "info")
+        self.host_console.write("Arret demande.", "info")
 
     def _on_service_stopped(self):
         self.service = None
         self.session_active = False
-        self.share_btn.configure(text="Demarrer le partage", bg=ACCENT,
-                                 activebackground=ACCENT, fg="#0d0d12")
+        self.share_btn.set_text("Demarrer le partage")
+        self.share_btn.set_kind("primary")
+        self.state_pill.set("Inactif", T.MUTED, T.SURFACE_2)
         self._set_endsession(False)
-        self.host_status.set("a l arret")
-        self._set_banner("Laboratoire pedagogique - reseau de test uniquement",
-                         MUTED)
+        self.host_status.set("A l'arret")
+        self._set_alert(None)
 
     def _end_session(self):
         if self.service:
@@ -914,75 +854,75 @@ class RdlabApp:
         if kind == "session_stats":
             q = fields["quality"]
             self.host_status.set(
-                "session active - %d img/s cible, qualite %d, RTT %s ms, "
-                "%d Ko envoyes" % (q["fps"], q["quality"], q["rtt_ms"],
-                                   fields["kbytes"]))
+                "Session active - %s img/s cible, qualite %s, %s ms de "
+                "latence, %d Ko envoyes"
+                % (q["fps"], q["quality"], q["rtt_ms"], fields["kbytes"]))
             return
         if kind == "session_start":
             self.session_active = True
             self._set_endsession(True)
             mode = ("observation seule" if not fields["allow_input"]
-                    else "controle clavier/souris")
-            self._set_banner(
-                "SESSION EN COURS - %s vous observe (%s)"
-                % (fields["client"], mode), "#ffffff", BAD)
-            self.host_console.write("session ouverte avec %s (%s)"
+                    else "controle clavier et souris")
+            self.state_pill.set("Session en cours", "#FFFFFF", T.BAD)
+            self._set_alert("SESSION EN COURS - %s vous observe (%s)"
+                            % (fields["client"], mode))
+            self.host_console.write("Session ouverte avec %s (%s)."
                                     % (fields["client"], mode), "good")
         elif kind == "session_end":
             self.session_active = False
             self._set_endsession(False)
-            self._set_banner(
-                "PARTAGE ACTIF - cet ordinateur peut etre observe", WARN)
-            self.host_console.write("session terminee (%s s)"
+            self.state_pill.set("Partage actif", "#FFFFFF", T.ACCENT)
+            self._set_alert("PARTAGE ACTIF - cet ordinateur peut etre observe")
+            self.host_console.write("Session terminee (%s s)."
                                     % fields["duration_s"], "info")
         elif kind == "auth_failed":
-            self.host_console.write("mot de passe REFUSE pour %s"
+            self.host_console.write("Mot de passe REFUSE pour %s."
                                     % fields.get("peer"), "bad")
         elif kind == "consent_denied":
-            self.host_console.write("connexion refusee par vous", "warn")
+            self.host_console.write("Connexion refusee par vous.", "warn")
         elif kind == "handshake_failed":
-            self.host_console.write("poignee de main rejetee : %s"
+            self.host_console.write("Poignee de main rejetee : %s"
                                     % fields.get("detail"), "bad")
         elif kind == "registered":
-            self.host_console.write("annonce sur l'antenne %s:%s"
-                                    % (fields["relay"], fields["port"]), "good")
+            self.host_console.write("Annonce sur l'antenne %s:%s."
+                                    % (fields["relay"], fields["port"]),
+                                    "good")
         elif kind == "relay_error":
-            self.host_console.write("antenne : %s (nouvel essai dans %.0f s)"
+            self.host_console.write("Antenne : %s (nouvel essai dans %.0f s)."
                                     % (fields["detail"], fields["retry_in"]),
                                     "warn")
         elif kind == "listening":
-            self.host_console.write("en ecoute sur %s:%s"
+            self.host_console.write("En ecoute sur %s:%s."
                                     % (fields["bind"], fields["port"]), "good")
         elif kind == "error":
             self.host_console.write(fields.get("detail", ""), "bad")
         self._refresh_log()
 
-    # -- actions : connexion -------------------------------------------
+    # -- actions : connexion ----------------------------------------------
     def _do_connect(self):
         target = self.target_var.get().strip()
         if not target:
-            self.client_console.write("indiquez la machine a joindre", "bad")
+            self.client_console.write("Indiquez la machine a joindre.", "bad")
             return
-        via = None
-        port = 7700
+        via, port = None, 7700
         if self.cmode_var.get() == "relay":
             via = self.cvia_var.get().strip()
             if not via:
-                self.client_console.write("indiquez l'adresse de l'antenne",
+                self.client_console.write("Indiquez l'adresse de l'antenne.",
                                           "bad")
                 return
         else:
             try:
                 port = int(self.cport_var.get())
             except ValueError:
-                self.client_console.write("port invalide", "bad")
+                self.client_console.write("Port invalide.", "bad")
                 return
 
         self.prefs.set("last_target", target)
         self.prefs.set("connect_relay", via or self.prefs.get("connect_relay"))
         self.prefs.set("connect_port", self.cport_var.get())
-        self.connect_btn.configure(state="disabled")
-        self.client_status.set("connexion...")
+        self.connect_btn.set_state("disabled")
+        self.client_status.set("Connexion en cours...")
         threading.Thread(target=self._connect_worker,
                          args=(target, port, via), daemon=True).start()
 
@@ -1009,39 +949,40 @@ class RdlabApp:
             reasons = {"bad_password": "mot de passe refuse par l'hote",
                        "consent_denied": "l'utilisateur de l'hote a refuse"}
             self._ui(self.client_console.write,
-                     "session refusee : %s" % reasons.get(str(exc), exc), "bad")
-            self._ui(self._connect_done, "refuse")
+                     "Session refusee : %s" % reasons.get(str(exc), exc),
+                     "bad")
+            self._ui(self._connect_done, "Session refusee")
             return
         except handshake.HandshakeError as exc:
             self._ui(self.client_console.write, str(exc), "bad")
-            self._ui(self._connect_done, "echec")
+            self._ui(self._connect_done, "Echec")
             return
         except Exception as exc:
-            self._ui(self.client_console.write, "echec : %s" % exc, "bad")
-            self._ui(self._connect_done, "echec")
+            self._ui(self.client_console.write, "Echec : %s" % exc, "bad")
+            self._ui(self._connect_done, "Echec")
             return
         self._ui(self._open_viewer, session)
 
     def _connect_done(self, state):
-        self.connect_btn.configure(state="normal")
+        self.connect_btn.set_state("normal")
         self.client_status.set(state)
 
     def _open_viewer(self, session):
-        self.client_console.write("session ouverte", "good")
-        self._connect_done("session ouverte")
+        self.client_console.write("Session ouverte.", "good")
+        self._connect_done("Session ouverte")
         win = tk.Toplevel(self.root)
         win.title("%s - %s" % (APP_NAME, session.core["machine_id"]))
         win.geometry("1100x700")
-        win.configure(bg=BG)
+        win.configure(bg=T.BG)
         status_var = tk.StringVar()
-        frame = tk.Frame(win, bg=BG)
+        frame = tk.Frame(win, bg=T.BG)
         frame.pack(fill="both", expand=True)
-        tk.Label(win, textvariable=status_var, anchor="w", bg=CARD, fg=ACCENT,
-                 font=("Consolas", 9)).pack(fill="x")
+        tk.Label(win, textvariable=status_var, anchor="w", bg=T.SURFACE,
+                 fg=T.FG_DIM, font=T.F_CODE, pady=5).pack(fill="x")
 
         def closed():
-            self.client_console.write("session fermee", "info")
-            self.client_status.set("pret")
+            self.client_console.write("Session fermee.", "info")
+            self.client_status.set("Pret")
             self.viewer_ctrl = None
             try:
                 win.destroy()
@@ -1052,7 +993,7 @@ class RdlabApp:
                                                    on_closed=closed)
         win.protocol("WM_DELETE_WINDOW", self.viewer_ctrl.close)
 
-    # -- fin ------------------------------------------------------------
+    # -- fin ---------------------------------------------------------------
     def _on_quit(self):
         if self.viewer_ctrl:
             self.viewer_ctrl.close()

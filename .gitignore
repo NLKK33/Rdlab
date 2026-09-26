@@ -20,6 +20,5 @@ Thumbs.db
 rdlab-lancement.log
 
 # Captures de travail
-rdlab-ui.png
-rdlab-exe.png
-rdlab-app.png
+rdlab-*.png
+prev-*.png
