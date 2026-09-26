@@ -14,14 +14,14 @@ jamais empecher l'application de demarrer.
 import json
 import os
 
-from . import identity
+from . import config, identity
 
 FILE = "settings.json"
 
 DEFAULTS = {
-    "relay": "",             # adresse de l'antenne, cote partage
+    "relay": None,           # adresse de l'antenne, cote partage
     "share_mode": "relay",   # "relay" ou "direct"
-    "connect_relay": "",     # adresse de l'antenne, cote client
+    "connect_relay": None,   # adresse de l'antenne, cote client
     "connect_mode": "relay",
     "connect_port": "7700",
     "lan_port": "7700",
@@ -48,7 +48,14 @@ class Prefs:
             pass     # fichier absent ou illisible : on garde les defauts
 
     def get(self, key):
-        return self.data.get(key, DEFAULTS.get(key))
+        """Les deux adresses d'antenne retombent sur la valeur integree.
+
+        `None` signifie "rien de choisi par l'utilisateur" et se distingue
+        d'une chaine vide, qui serait un effacement volontaire."""
+        value = self.data.get(key, DEFAULTS.get(key))
+        if key in ("relay", "connect_relay") and value is None:
+            return config.default_relay()
+        return value
 
     def set(self, key, value):
         if self.data.get(key) == value:

@@ -80,6 +80,12 @@ Recuperez **`rdlab.exe`** et double-cliquez. C'est tout : un seul fichier,
 aucun Python a installer, rien a configurer. Copiez-le sur autant de machines
 que vous voulez.
 
+**L'adresse de l'antenne est integree a l'application** (`rdlab/config.py`) :
+il n'y a rien a saisir. Au demarrage, elle est sondee et son etat s'affiche
+a cote de votre identifiant. Pour en utiliser une autre, changez `DEFAULT_RELAY`
+et reconstruisez, definissez la variable d'environnement `RDLAB_RELAY`, ou
+saisissez-la dans les options avancees.
+
 L'executable range ses donnees dans `%LOCALAPPDATA%\rdlab` (cle d'appareil,
 reglages, journal) plutot qu'a cote de lui : un `.exe` peut etre lance depuis
 un dossier en lecture seule, ou depuis n'importe ou via un raccourci.

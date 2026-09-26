@@ -40,6 +40,7 @@ import time
 import tkinter as tk
 
 from . import auth, client, handshake, host, identity, prefs as prefs_mod
+from . import rendezvous
 from . import session_log
 from . import theme as T
 
@@ -414,6 +415,7 @@ class RdlabApp:
         self.root.configure(bg=T.BG)
         self._build()
         self._refresh_credentials()
+        self.root.after(300, self._check_relay)
         self.root.protocol("WM_DELETE_WINDOW", self._on_quit)
 
     def _ui(self, fn, *args):
@@ -490,17 +492,9 @@ class RdlabApp:
         T.RoundButton(row, "Copier", self._copy_id, "ghost", height=36,
                       width=94, page_bg=T.SURFACE).pack(side="left", padx=16)
 
-        netc = T.Card(root, padding=22)
-        netc.pack(fill="x", pady=(0, 12))
-        b = netc.body
         self.mode_var = tk.StringVar(value=self.prefs.get("share_mode"))
         self.relay_var = tk.StringVar(value=self.prefs.get("relay"))
-        T.hint(b, "ADRESSE DE VOTRE ANTENNE").pack(anchor="w")
-        self.relay_entry = T.entry(b, self.relay_var)
-        self.relay_entry.pack(fill="x", ipady=7, pady=(4, 6))
-        self.relay_entry.bind("<FocusOut>", lambda e: self.prefs.set(
-            "relay", self.relay_var.get().strip()))
-        T.hint(b, "Retenue pour les prochaines fois.").pack(anchor="w")
+        self.relay_pill = self._relay_row(root, self.relay_var)
 
         self.pw_state = tk.StringVar()
         self.pw_label = tk.Label(root, textvariable=self.pw_state, bg=T.BG,
@@ -527,6 +521,14 @@ class RdlabApp:
         T.RoundButton(a, "Definir le mot de passe d'acces", self._set_password,
                       "ghost", height=38, width=250,
                       page_bg=T.SURFACE).pack(anchor="w", pady=(0, 12))
+
+        T.hint(a, "ADRESSE DE L'ANTENNE").pack(anchor="w")
+        self.relay_entry = T.entry(a, self.relay_var)
+        self.relay_entry.pack(fill="x", ipady=6, pady=(4, 2))
+        self.relay_entry.bind("<FocusOut>", lambda e: self._relay_changed())
+        self.relay_entry.bind("<Return>", lambda e: self._relay_changed())
+        T.hint(a, "Deja renseignee. Ne la changez que pour utiliser une "
+                  "autre antenne.").pack(fill="x", pady=(0, 12))
 
         self.viewonly_var = tk.BooleanVar(value=self.prefs.get("view_only"))
         T.check(a, "Observation seule (ne pas appliquer clavier et souris)",
@@ -591,13 +593,9 @@ class RdlabApp:
             b, "Les 9 chiffres affiches sur l'autre machine.")
         self.target_hint.pack(anchor="w")
 
-        T.hint(b, "ADRESSE DE VOTRE ANTENNE").pack(anchor="w", pady=(16, 0))
         self.cvia_var = tk.StringVar(value=self.prefs.get("connect_relay")
                                      or self.prefs.get("relay"))
-        self.cvia_entry = T.entry(b, self.cvia_var)
-        self.cvia_entry.pack(fill="x", ipady=7, pady=(4, 0))
-        self.cvia_entry.bind("<FocusOut>", lambda e: self.prefs.set(
-            "connect_relay", self.cvia_var.get().strip()))
+        self.cvia_pill = self._relay_row(root, self.cvia_var)
 
         self.connect_btn = T.RoundButton(root, "Se connecter",
                                          self._do_connect, "primary",
@@ -610,6 +608,14 @@ class RdlabApp:
         adv = Collapsible(root, "Options avancees")
         adv.pack(fill="x", pady=(10, 0))
         a = adv.body
+        T.hint(a, "ADRESSE DE L'ANTENNE").pack(anchor="w")
+        self.cvia_entry = T.entry(a, self.cvia_var)
+        self.cvia_entry.pack(fill="x", ipady=6, pady=(4, 2))
+        self.cvia_entry.bind("<FocusOut>", lambda e: self._cvia_changed())
+        self.cvia_entry.bind("<Return>", lambda e: self._cvia_changed())
+        T.hint(a, "Deja renseignee. Ne la changez que pour utiliser une "
+                  "autre antenne.").pack(fill="x", pady=(0, 12))
+
         self.cmode_var = tk.StringVar(value=self.prefs.get("connect_mode"))
         T.radio(a, "Passer par l'antenne (recommande)", self.cmode_var,
                 "relay", self._refresh_cmode).pack(fill="x")
@@ -672,6 +678,57 @@ class RdlabApp:
             self.log_box.write("%s  %-20s %s" % (e["ts"], e["event"], rest),
                                tags.get(e["event"], "info"))
 
+    # -- antenne ---------------------------------------------------------
+    def _relay_row(self, parent, var):
+        """Ligne d'etat de l'antenne : adresse + pastille de joignabilite.
+
+        L'adresse est integree a l'application (config.py) : elle n'a pas
+        a occuper un champ de saisie sur l'ecran principal. Ce qui
+        interesse l'utilisateur ici, ce n'est pas sa valeur, c'est de
+        savoir si elle repond."""
+        row = tk.Frame(parent, bg=T.BG)
+        row.pack(fill="x", pady=(0, 14))
+        tk.Label(row, text="Antenne", bg=T.BG, fg=T.MUTED,
+                 font=T.F_SMALL).pack(side="left")
+        tk.Label(row, textvariable=var, bg=T.BG, fg=T.FG_DIM,
+                 font=T.F_CODE).pack(side="left", padx=8)
+        pill = T.Pill(row)
+        pill.pack(side="left", padx=6, pady=2)
+        pill.set("verification...", T.MUTED, T.SURFACE_2)
+        return pill
+
+    def _probe_relay(self):
+        """Sonde l'antenne en fond. Aucune trace n'est laissee cote
+        serveur : c'est une simple ouverture TCP."""
+        address = self.relay_var.get()
+        ok, detail = rendezvous.probe(address)
+        self._ui(self._show_relay_state, ok, detail)
+        if self.cvia_var.get() != address:
+            ok2, detail2 = rendezvous.probe(self.cvia_var.get())
+            self._ui(self._show_relay_state, ok2, detail2, "client")
+        else:
+            self._ui(self._show_relay_state, ok, detail, "client")
+
+    def _show_relay_state(self, ok, detail, which="host"):
+        pill = self.cvia_pill if which == "client" else self.relay_pill
+        if ok:
+            pill.set("joignable - %s" % detail, "#FFFFFF", T.OK)
+        else:
+            pill.set(detail, "#FFFFFF", T.BAD)
+
+    def _check_relay(self):
+        for pill in (self.relay_pill, self.cvia_pill):
+            pill.set("verification...", T.MUTED, T.SURFACE_2)
+        threading.Thread(target=self._probe_relay, daemon=True).start()
+
+    def _relay_changed(self):
+        self.prefs.set("relay", self.relay_var.get().strip())
+        self._check_relay()
+
+    def _cvia_changed(self):
+        self.prefs.set("connect_relay", self.cvia_var.get().strip())
+        self._check_relay()
+
     # -- etat -----------------------------------------------------------
     def _guess_lan_ip(self):
         """Adresse LAN probable. Aucun paquet n'est emis : connect() sur
@@ -686,15 +743,25 @@ class RdlabApp:
             s.close()
 
     def _refresh_credentials(self):
+        """Au premier lancement, le bouton principal MENE a l'etape
+        suivante au lieu d'etre grise.
+
+        Un bouton desactive accompagne d'un avertissement renvoyant vers
+        un menu replie donne l'impression d'un logiciel casse. Ici, le
+        seul bouton de l'ecran fait toujours la chose a faire
+        maintenant."""
+        if self.service:
+            return
         if self.creds.has_password:
-            self.pw_state.set("Mot de passe d'acces defini")
-            self.pw_label.configure(fg=T.OK)
-            self.share_btn.set_state("normal")
+            self.pw_state.set("")
+            self.share_btn.set_text("Demarrer le partage")
         else:
-            self.pw_state.set("Definissez d'abord un mot de passe d'acces "
-                              "(Options avancees)")
-            self.pw_label.configure(fg=T.WARN)
-            self.share_btn.set_state("disabled")
+            self.pw_state.set("Premiere utilisation : choisissez un mot de "
+                              "passe. Il protegera l'acces a votre ecran.")
+            self.pw_label.configure(fg=T.FG_DIM)
+            self.share_btn.set_text("Choisir un mot de passe")
+        self.share_btn.set_kind("primary")
+        self.share_btn.set_state("normal")
         self.unattended_var.set(self.creds.unattended)
 
     def _refresh_mode(self):
@@ -760,6 +827,8 @@ class RdlabApp:
         self.host_console.write("Mot de passe enregistre (scrypt N=32768).",
                                 "good")
         self._refresh_credentials()
+        self.host_status.set("Mot de passe enregistre. Vous pouvez demarrer "
+                             "le partage.")
 
     def _toggle_unattended(self):
         try:
@@ -783,8 +852,11 @@ class RdlabApp:
     def _toggle_share(self):
         if self.service:
             self._stop_share()
-        else:
-            self._start_share()
+            return
+        if not self.creds.has_password:
+            self._set_password()      # le bouton mene a l'etape manquante
+            return
+        self._start_share()
 
     def _start_share(self):
         if not self.creds.has_password:

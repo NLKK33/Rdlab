@@ -450,6 +450,44 @@ class RelayAgent:
 #  Cote client : demander une machine par son identifiant
 # =====================================================================
 
+def split_address(address, default_port=DEFAULT_PORT):
+    """'vps.exemple.net' ou 'vps.exemple.net:7800' -> (hote, port)."""
+    address = (address or "").strip()
+    if not address:
+        return "", default_port
+    if ":" in address:
+        host, _, port = address.rpartition(":")
+        try:
+            return host, int(port)
+        except ValueError:
+            return address, default_port
+    return address, default_port
+
+
+def probe(address, timeout=5.0):
+    """L'antenne repond-elle ? -> (booleen, detail lisible).
+
+    Une simple ouverture TCP suffit et ne laisse aucune trace dans le
+    registre de l'antenne : on veut savoir si le chemin reseau est
+    ouvert, pas enregistrer quoi que ce soit. Un echec distingue le
+    nom introuvable du port ferme, parce que le remede n'est pas le
+    meme (DNS contre pare-feu)."""
+    host, port = split_address(address)
+    if not host:
+        return False, "aucune adresse"
+    started = time.time()
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except socket.gaierror:
+        return False, "nom introuvable"
+    except socket.timeout:
+        return False, "pas de reponse (port filtre ?)"
+    except OSError as exc:
+        return False, "injoignable (%s)" % getattr(exc, "strerror", exc)
+    sock.close()
+    return True, "%d ms" % int((time.time() - started) * 1000)
+
+
 def relay_connect(relay_host, relay_port, machine_id, timeout=30):
     """Retourne un socket relie a l hote, pret pour client_handshake()."""
     sock = socket.create_connection((relay_host, relay_port), timeout=timeout)
